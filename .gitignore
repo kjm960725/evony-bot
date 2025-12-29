@@ -1,0 +1,51 @@
+# Node modules
+node_modules/
+
+# Environment variables
+.env
+
+# Build output
+dist/
+
+# Puppeteer Chrome
+chrome/
+chrome-user-data/
+
+# Debug files
+login-error.html
+login-error.png
+login-failed.png
+debug*.png
+debug*.html
+
+# TypeScript cache
+*.tsbuildinfo
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE files
+.idea/
+*.swp
+*.swo
+*~
+
+# VS Code 설정은 공유 (디버그 설정 포함)
+# .vscode/
+
+# Test coverage
+coverage/
+
+# Prisma
+/src/generated/prisma
+prisma/*.db
+prisma/*.db-journal
+prisma/migrations/

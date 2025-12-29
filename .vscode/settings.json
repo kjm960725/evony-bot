@@ -1,0 +1,45 @@
+{
+  // TypeScript 설정
+  "typescript.tsdk": "node_modules/typescript/lib",
+  "typescript.enablePromptUseWorkspaceTsdk": true,
+  
+  // 파일 자동 저장
+  "files.autoSave": "onFocusChange",
+  
+  // 편집기 설정
+  "editor.formatOnSave": true,
+  "editor.codeActionsOnSave": {
+    "source.fixAll": "explicit",
+    "source.organizeImports": "explicit"
+  },
+  
+  // 탐색기 제외 항목
+  "files.exclude": {
+    "**/.git": true,
+    "**/node_modules": true,
+    "**/dist": true
+  },
+  
+  // 검색 제외
+  "search.exclude": {
+    "**/node_modules": true,
+    "**/dist": true
+  },
+  
+  // 파일 감시 제외
+  "files.watcherExclude": {
+    "**/node_modules/**": true,
+    "**/dist/**": true
+  },
+  
+  // 터미널 설정
+  "terminal.integrated.env.osx": {},
+  "terminal.integrated.env.linux": {},
+  "terminal.integrated.env.windows": {},
+  
+  // 디버그 설정
+  "debug.javascript.autoAttachFilter": "smart",
+  "debug.allowBreakpointsEverywhere": true,
+  "prisma.pinToPrisma6": true
+}
+

@@ -1,0 +1,37 @@
+{
+  "name": "evony-discord-bot",
+  "version": "1.0.0",
+  "description": "Evony Discord Bot built with TypeScript",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "ts-node src/index.ts",
+    "dev:watch": "ts-node-dev --respawn --transpile-only src/index.ts",
+    "watch": "tsc -w",
+    "debug": "node --inspect -r ts-node/register src/index.ts"
+  },
+  "keywords": [
+    "discord",
+    "bot",
+    "evony",
+    "typescript"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@prisma/client": "^5.22.0",
+    "discord.js": "^14.14.1",
+    "dotenv": "^16.3.1",
+    "prisma": "^5.22.0",
+    "puppeteer": "^21.6.1",
+    "puppeteer-extra": "^3.3.6",
+    "puppeteer-extra-plugin-stealth": "^2.11.2"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.6",
+    "ts-node": "^10.9.2",
+    "ts-node-dev": "^2.0.0",
+    "typescript": "^5.3.3"
+  }
+}
