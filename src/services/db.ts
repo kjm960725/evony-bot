@@ -55,7 +55,9 @@ export class DatabaseService {
     username: string,
     type: AlertType, 
     minLevel?: number, 
-    maxDistance?: number
+    maxDistance?: number,
+    minPower?: number,
+    maxPower?: number
   ) {
     // 먼저 User가 존재하는지 확인하고 없으면 생성
     await prisma.user.upsert({
@@ -80,6 +82,8 @@ export class DatabaseService {
       update: {
         minLevel,
         maxDistance,
+        minPower: minPower !== undefined ? BigInt(minPower) : undefined,
+        maxPower: maxPower !== undefined ? BigInt(maxPower) : undefined,
         enabled: true,
       },
       create: {
@@ -87,9 +91,69 @@ export class DatabaseService {
         type,
         minLevel,
         maxDistance,
+        minPower: minPower !== undefined ? BigInt(minPower) : undefined,
+        maxPower: maxPower !== undefined ? BigInt(maxPower) : undefined,
         enabled: true,
       },
     });
+  }
+
+  // 바바리안 파워 설정 (간단 메서드)
+  async setBarbarianPower(discordId: string, username: string, minPower: number, maxPower: number) {
+    // 먼저 User가 존재하는지 확인하고 없으면 생성
+    await prisma.user.upsert({
+      where: { discordId },
+      update: { username },
+      create: {
+        discordId,
+        username,
+        x: 0,
+        y: 0,
+      },
+    });
+
+    // 바바리안 알림 설정 업데이트 (없으면 생성)
+    return await prisma.userAlert.upsert({
+      where: {
+        discordId_type: {
+          discordId,
+          type: 'barbarian',
+        },
+      },
+      update: {
+        minPower: BigInt(minPower),
+        maxPower: BigInt(maxPower),
+        enabled: true,
+      },
+      create: {
+        discordId,
+        type: 'barbarian',
+        minPower: BigInt(minPower),
+        maxPower: BigInt(maxPower),
+        enabled: true,
+      },
+    });
+  }
+
+  // 바바리안 파워 설정 가져오기
+  async getBarbarianPower(discordId: string) {
+    const alert = await prisma.userAlert.findUnique({
+      where: {
+        discordId_type: {
+          discordId,
+          type: 'barbarian',
+        },
+      },
+    });
+
+    if (alert && alert.minPower !== null && alert.maxPower !== null) {
+      return {
+        minPower: Number(alert.minPower),
+        maxPower: Number(alert.maxPower),
+      };
+    }
+
+    return null;
   }
 
   // 사용자의 특정 타입 알림 가져오기

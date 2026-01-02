@@ -11,29 +11,31 @@ datasource db {
 }
 
 model User {
-  id          Int         @id @default(autoincrement())
-  discordId   String      @unique  // 디스코드 사용자 ID
-  username    String              // 디스코드 사용자 이름
-  x           Int                 // X 좌표
-  y           Int                 // Y 좌표
-  createdAt   DateTime    @default(now())
-  updatedAt   DateTime    @updatedAt
-  alerts      UserAlert[] // 사용자의 알림 설정들
+  id        Int         @id @default(autoincrement())
+  discordId String      @unique // 디스코드 사용자 ID
+  username  String // 디스코드 사용자 이름
+  x         Int // X 좌표
+  y         Int // Y 좌표
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+  alerts    UserAlert[] // 사용자의 알림 설정들
 }
 
 // 사용자 알림 설정
 model UserAlert {
-  id          Int       @id @default(autoincrement())
-  discordId   String    // 디스코드 사용자 ID
-  type        String    // 좌표 타입: 'pyramid', 'barbarian', 'ares'
-  minLevel    Int?      // 최소 레벨 (null이면 제한 없음)
-  maxDistance Int?      // 최대 거리 (null이면 제한 없음, 사용자 좌표 기반)
-  enabled     Boolean   @default(true)
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  id          Int      @id @default(autoincrement())
+  discordId   String // 디스코드 사용자 ID
+  type        String // 좌표 타입: 'pyramid', 'barbarian', 'ares'
+  minLevel    Int? // 최소 레벨 (null이면 제한 없음)
+  maxDistance Int? // 최대 거리 (null이면 제한 없음, 사용자 좌표 기반)
+  minPower    BigInt? // 최소 파워 (바바리안 전용, null이면 제한 없음)
+  maxPower    BigInt? // 최대 파워 (바바리안 전용, null이면 제한 없음)
+  enabled     Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
   // User와의 관계
-  user        User      @relation(fields: [discordId], references: [discordId])
+  user User @relation(fields: [discordId], references: [discordId])
 
   // 같은 사용자가 같은 타입에 대해 중복 알림 방지
   @@unique([discordId, type])
@@ -41,14 +43,14 @@ model UserAlert {
 
 // 보낸 알림 기록 (중복 방지용)
 model SentAlert {
-  id          Int       @id @default(autoincrement())
-  discordId   String    // 디스코드 사용자 ID
-  type        String    // 좌표 타입: 'pyramid', 'barbarian', 'ares'
-  level       Int       // 좌표 레벨
-  power       Int?      // 파워 (바바리안 등)
-  x           Int       // X 좌표
-  y           Int       // Y 좌표
-  sentAt      DateTime  @default(now())
+  id        Int      @id @default(autoincrement())
+  discordId String // 디스코드 사용자 ID
+  type      String // 좌표 타입: 'pyramid', 'barbarian', 'ares'
+  level     Int // 좌표 레벨
+  power     Int? // 파워 (바바리안 등)
+  x         Int // X 좌표
+  y         Int // Y 좌표
+  sentAt    DateTime @default(now())
 
   // 인덱스 (빠른 조회를 위해)
   @@index([discordId, type, level])

@@ -62,3 +62,32 @@ export function sortPyramids<T extends Coordinate>(
         });
 }
 
+/**
+ * 바바리안을 파워 역순 → 거리순으로 정렬
+ * @param barbarians 바바리안 배열
+ * @param userX 사용자 X 좌표
+ * @param userY 사용자 Y 좌표
+ * @returns 정렬된 바바리안 배열 (거리 정보 포함)
+ */
+export function sortBarbarians<T extends Coordinate>(
+    barbarians: T[],
+    userX: number,
+    userY: number
+): (T & { distance: number })[] {
+    return barbarians
+        .map(barbarian => ({
+            ...barbarian,
+            distance: calculateDistance(userX, userY, barbarian.x, barbarian.y),
+        }))
+        .sort((a, b) => {
+            // 1순위: 파워 역순 (높은 파워 먼저)
+            const powerA = a.power || 0;
+            const powerB = b.power || 0;
+            if (powerB !== powerA) {
+                return powerB - powerA;
+            }
+            // 2순위: 거리순 (가까운 것 먼저)
+            return a.distance - b.distance;
+        });
+}
+

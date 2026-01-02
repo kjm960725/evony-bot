@@ -5,7 +5,7 @@ import { cache } from '../services/cache';
 import { AlertType, db } from '../services/db';
 import { scheduler } from '../services/scheduler';
 import { Coordinate } from '../types/coordinate';
-import { sortPyramids } from '../utils/distance';
+import { sortPyramids, sortBarbarians } from '../utils/distance';
 import { formatPower } from '../utils/format';
 
 export interface Command {
@@ -42,7 +42,12 @@ const helpCommand: Command = {
         },
         {
           name: '🗺️ Coordinate Commands',
-          value: '`!barbarian` (or `!bb`) - Barbarian coordinates\n`!ares` (or `!ar`) - Ares coordinates\n`!pyramid [level]` (or `!py [level]`) - Pyramid coordinates (e.g., `!py 5`)',
+          value: '`!barbarian` (or `!bb`) - Barbarian coordinates (power sorted)\n`!ares` (or `!ar`) - Ares coordinates\n`!pyramid [level]` (or `!py [level]`) - Pyramid coordinates (e.g., `!py 5`)',
+          inline: false
+        },
+        {
+          name: '⚔️ Barbarian Settings',
+          value: '`!bbpower <min> <max>` (or `!bbp`) - Set power range (e.g., `!bbpower 500M 2B`)\n`!bbpower` - View your current power range',
           inline: false
         },
         {
@@ -61,7 +66,7 @@ const helpCommand: Command = {
         value: `${status.sequence}\nRotating every 5 minutes\nNext: **${status.next}** in ${minutes}m ${seconds}s`,
         inline: false
       })
-      .setFooter({ text: 'Commands start with ! | Each type updates every 15 minutes' })
+      .setFooter({ text: 'Commands start with ! | Power units: K, M, B' })
       .setTimestamp();
 
     await message.reply({ embeds: [embed] });
@@ -79,25 +84,100 @@ const barbarianCommand: Command = {
     }
 
     try {
-      const coordinates = await fetchCoordinates('barbarian');
+      // 파워 설정 확인
+      const powerSettings = await db.getBarbarianPower(message.author.id);
+      
+      // 사용자 위치 확인
+      const userPosition = await db.getUserPosition(message.author.id);
+
+      let coordinates = await fetchCoordinates('barbarian');
 
       if (coordinates.length === 0) {
         await message.reply('⚠️ No Barbarian coordinates available at the moment.');
         return;
       }
 
+      // 파워 필터링 (설정된 경우)
+      let filteredCount = 0;
+      if (powerSettings) {
+        const originalLength = coordinates.length;
+        coordinates = coordinates.filter(coord => {
+          if (coord.power === undefined) return false;
+          return coord.power >= powerSettings.minPower && coord.power <= powerSettings.maxPower;
+        });
+        filteredCount = originalLength - coordinates.length;
+      }
+
+      // 정렬: 1순위 파워 내림차순, 2순위 거리순 (사용자 위치 있을 때)
+      let sortedCoordinates: (Coordinate & { distance?: number })[];
+      if (userPosition) {
+        sortedCoordinates = sortBarbarians(coordinates, userPosition.x, userPosition.y);
+      } else {
+        // 사용자 위치 없으면 파워만으로 정렬
+        sortedCoordinates = coordinates.sort((a, b) => {
+          const powerA = a.power || 0;
+          const powerB = b.power || 0;
+          return powerB - powerA;
+        });
+      }
+
       const embed = new EmbedBuilder()
         .setTitle('🗡️ Barbarian Coordinates')
-        .setDescription(`Found ${coordinates.length} Barbarian${coordinates.length > 1 ? 's' : ''}`)
         .setColor(0xff4444)
         .setTimestamp();
 
+      // 설명 메시지 구성
+      let description = `Found ${sortedCoordinates.length} Barbarian${sortedCoordinates.length > 1 ? 's' : ''}`;
+      
+      // 정렬 정보 추가
+      if (userPosition) {
+        description += `\n📊 Sorted by: Power ↓ → Distance ↑`;
+      } else {
+        description += `\n📊 Sorted by: Power ↓`;
+      }
+      
+      // 파워 설정 안내
+      if (!powerSettings) {
+        description += `\n\n💡 **Tip**: Set your preferred power range with:\n` +
+          `\`!bbpower <min> <max>\`\n` +
+          `Example: \`!bbpower 500M 1B\` (500M ~ 1B)\n` +
+          `Units: K, M, B (e.g., 100K, 500M, 1.5B)`;
+      } else {
+        const minPowerStr = formatPower(powerSettings.minPower);
+        const maxPowerStr = formatPower(powerSettings.maxPower);
+        description += `\n⚔️ Power range: **${minPowerStr} ~ ${maxPowerStr}**`;
+        if (filteredCount > 0) {
+          description += `\n🔽 Filtered out: ${filteredCount}`;
+        }
+      }
+      
+      // 위치 미설정 안내
+      if (!userPosition) {
+        description += `\n\n💡 **Tip**: Use \`!setpos <X> <Y>\` to sort by distance`;
+      }
+      
+      embed.setDescription(description);
+
+      if (sortedCoordinates.length === 0) {
+        await message.reply({
+          embeds: [embed.setDescription(
+            `⚠️ No barbarians found in your power range.\n` +
+            `Current range: **${formatPower(powerSettings!.minPower)} ~ ${formatPower(powerSettings!.maxPower)}**\n\n` +
+            `Use \`!bbpower <min> <max>\` to change your range.`
+          )]
+        });
+        return;
+      }
+
       // Add fields (Discord embed 최대 25개 필드 제한)
-      const maxDisplay = Math.min(coordinates.length, 25);
-      coordinates.slice(0, maxDisplay).forEach((coord, index) => {
+      const maxDisplay = Math.min(sortedCoordinates.length, 25);
+      sortedCoordinates.slice(0, maxDisplay).forEach((coord, index) => {
         let value = `X: \`${coord.x}\` Y: \`${coord.y}\``;
         if (coord.power !== undefined) {
           value += `\n⚔️ ${formatPower(coord.power)}`;
+        }
+        if (coord.distance !== undefined) {
+          value += `\n📏 Distance: ${Math.round(coord.distance)}`;
         }
         if (coord.alliance) {
           value += `\n👥 ${coord.alliance}`;
@@ -110,8 +190,8 @@ const barbarianCommand: Command = {
         });
       });
 
-      if (coordinates.length > maxDisplay) {
-        embed.setFooter({ text: `Showing ${maxDisplay}/${coordinates.length}` });
+      if (sortedCoordinates.length > maxDisplay) {
+        embed.setFooter({ text: `Showing ${maxDisplay}/${sortedCoordinates.length}` });
       }
 
       await message.reply({
@@ -860,6 +940,103 @@ const alertsCommand: Command = {
   },
 };
 
+// 파워 문자열을 숫자로 변환 (예: "500M" -> 500000000)
+function parsePowerString(powerStr: string): number | null {
+  const match = powerStr.match(/^([0-9.]+)\s*([KMB])$/i);
+  if (!match) return null;
+
+  const value = parseFloat(match[1]);
+  const unit = match[2].toUpperCase();
+
+  if (isNaN(value) || value <= 0) return null;
+
+  switch (unit) {
+    case 'K': return Math.round(value * 1000);
+    case 'M': return Math.round(value * 1000000);
+    case 'B': return Math.round(value * 1000000000);
+    default: return null;
+  }
+}
+
+// Barbarian Power Range command
+const barbarianPowerCommand: Command = {
+  name: 'bbpower',
+  description: 'Set your preferred barbarian power range',
+  usage: '!bbpower <min> <max> (예: !bbpower 500M 2B)',
+  execute: async (message: Message, args: string[]) => {
+    try {
+      // 인자 없이 호출 시 현재 설정 표시
+      if (args.length === 0) {
+        const settings = await db.getBarbarianPower(message.author.id);
+        
+        if (!settings) {
+          await message.reply(
+            '⚔️ **Barbarian Power Range Settings**\n\n' +
+            'You have not set a power range yet.\n\n' +
+            '**Usage**: `!bbpower <min> <max>`\n' +
+            '**Example**: `!bbpower 500M 2B` (500M ~ 2B)\n' +
+            '**Units**: K (thousand), M (million), B (billion)\n\n' +
+            '**More examples**:\n' +
+            '• `!bbpower 100M 1B` - 100M to 1B\n' +
+            '• `!bbpower 1B 5B` - 1B to 5B'
+          );
+          return;
+        }
+
+        await message.reply(
+          `⚔️ **Your Barbarian Power Range**\n\n` +
+          `Min: **${formatPower(settings.minPower)}**\n` +
+          `Max: **${formatPower(settings.maxPower)}**\n\n` +
+          `Use \`!bbpower <min> <max>\` to change.`
+        );
+        return;
+      }
+
+      // 2개 인자 필요
+      if (args.length !== 2) {
+        await message.reply(
+          '❌ Invalid format.\n\n' +
+          '**Usage**: `!bbpower <min> <max>`\n' +
+          '**Example**: `!bbpower 500M 2B`\n' +
+          '**Units**: K, M, B'
+        );
+        return;
+      }
+
+      const minPower = parsePowerString(args[0]);
+      const maxPower = parsePowerString(args[1]);
+
+      if (minPower === null || maxPower === null) {
+        await message.reply(
+          '❌ Invalid power format.\n\n' +
+          '**Valid formats**: 100K, 500M, 1.5B\n' +
+          '**Units**: K (thousand), M (million), B (billion)'
+        );
+        return;
+      }
+
+      if (minPower >= maxPower) {
+        await message.reply('❌ Minimum power must be less than maximum power.');
+        return;
+      }
+
+      // DB에 저장
+      await db.setBarbarianPower(message.author.id, message.author.username, minPower, maxPower);
+
+      await message.reply(
+        `✅ **Barbarian power range set!**\n\n` +
+        `Min: **${formatPower(minPower)}**\n` +
+        `Max: **${formatPower(maxPower)}**\n\n` +
+        `Use \`!bb\` or \`!barbarian\` to see filtered results.`
+      );
+
+    } catch (error) {
+      console.error('Failed to set barbarian power:', error);
+      await message.reply('❌ An error occurred while setting power range.');
+    }
+  },
+};
+
 // Commands array
 export const commands: Command[] = [
   helpCommand,
@@ -874,6 +1051,7 @@ export const commands: Command[] = [
   alertCommand,
   alertsCommand,
   logsCommand,
+  barbarianPowerCommand,
 ];
 
 // Command aliases mapping
@@ -890,4 +1068,6 @@ export const commandAliases: { [key: string]: string } = {
   'position': 'setpos',
 
   'getpos': 'mypos',
+
+  'bbp': 'bbpower',
 };
