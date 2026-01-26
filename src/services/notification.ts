@@ -62,13 +62,16 @@ class NotificationService {
 
     for (const alert of alerts) {
       try {
-        // 사용자에게 맞는 좌표 필터링 (레벨, 거리)
+        // 사용자에게 맞는 좌표 필터링 (레벨, 거리, 파워)
         let matchingCoords = this.filterCoordinatesForUser(
+          type,
           actuallyNewCoords,
           alert.minLevel,
           alert.maxDistance,
           alert.user?.x,
-          alert.user?.y
+          alert.user?.y,
+          alert.minPower ? Number(alert.minPower) : null,
+          alert.maxPower ? Number(alert.maxPower) : null
         );
 
         if (matchingCoords.length === 0) {
@@ -84,6 +87,15 @@ class NotificationService {
 
         if (matchingCoords.length === 0) {
           continue;
+        }
+
+        // 바바리안인 경우 파워 내림차순으로 정렬
+        if (type === 'barbarian') {
+          matchingCoords.sort((a, b) => {
+            const powerA = a.power || 0;
+            const powerB = b.power || 0;
+            return powerB - powerA;
+          });
         }
 
         // Discord 사용자 가져오기
@@ -158,16 +170,29 @@ class NotificationService {
 
   // 사용자 설정에 맞는 좌표 필터링
   private filterCoordinatesForUser(
+    type: AlertType,
     coordinates: Coordinate[],
     minLevel: number | null,
     maxDistance: number | null,
     userX: number | undefined | null,
-    userY: number | undefined | null
+    userY: number | undefined | null,
+    minPower: number | null,
+    maxPower: number | null
   ): (Coordinate & { distance?: number })[] {
     return coordinates.filter(coord => {
       // 최소 레벨 필터
       if (minLevel !== null && coord.level < minLevel) {
         return false;
+      }
+
+      // 파워 필터 (바바리안 전용, 설정된 경우만)
+      if (type === 'barbarian' && minPower !== null && maxPower !== null) {
+        if (coord.power === undefined) {
+          return false; // 파워 정보 없으면 제외
+        }
+        if (coord.power < minPower || coord.power > maxPower) {
+          return false; // 파워 범위 벗어나면 제외
+        }
       }
 
       // 최대 거리 필터 (사용자 좌표가 있을 때만)

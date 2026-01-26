@@ -384,13 +384,33 @@ ISCOUT_PASSWORD=your_password
 ### 빠른 배포 명령어
 
 ```bash
+# 배포 스크립트 실행 (권장)
+./deploy.sh
+```
+
+또는 수동 배포:
+
+```bash
 # 빌드 & 배포 (로컬에서 실행)
 cd "/Users/devjm/Documents/Persnal Project/Evony Bot" && \
 npm run build && \
-tar -czf /tmp/evony-bot.tar.gz --exclude='node_modules' --exclude='chrome' --exclude='chrome-user-data' --exclude='.git' --exclude='*.log' --exclude='.env' . && \
+tar -czf /tmp/evony-bot.tar.gz \
+  --exclude='node_modules' \
+  --exclude='chrome' \
+  --exclude='chrome-user-data' \
+  --exclude='.git' \
+  --exclude='*.log' \
+  --exclude='.env' \
+  --exclude='*.db' \
+  --exclude='*.db-journal' \
+  --exclude='*.png' \
+  --exclude='*.html' \
+  . && \
 scp /tmp/evony-bot.tar.gz evony-bot:~/ && \
-ssh evony-bot "cd ~/evony-bot && tar -xzf ~/evony-bot.tar.gz && pm2 restart evony-bot"
+ssh evony-bot "cd ~/evony-bot && tar -xzf ~/evony-bot.tar.gz && npx prisma migrate deploy && pm2 restart evony-bot"
 ```
+
+**⚠️ 중요**: `--exclude='*.db'`로 데이터베이스 파일을 제외해서 서버의 데이터를 보존합니다.
 
 ### 최초 서버 설정
 
@@ -445,8 +465,10 @@ pm2 stop evony-bot && pm2 delete evony-bot && pm2 start ecosystem.config.js
 ### 중요 사항
 
 - ⚠️ **`.env` 파일은 배포에서 제외됨** - 서버에서 직접 관리
+- ⚠️ **데이터베이스(`.db`) 파일도 배포에서 제외됨** - 서버의 기존 데이터 보존
 - ⚠️ **PUPPETEER_EXECUTABLE_PATH** - ARM64 서버에서는 `/usr/bin/chromium` 사용
-- ⚠️ **Prisma 마이그레이션** - 스키마 변경 시 서버에서도 `npx prisma db push` 실행 필요
+- ⚠️ **Prisma 마이그레이션** - 스키마 변경 시 배포 스크립트가 자동으로 `prisma migrate deploy` 실행
+- ✅ **안전한 배포** - 사용자 데이터, 알림 설정, 좌표 데이터 모두 보존됨
 
 ## 📚 참고 자료
 

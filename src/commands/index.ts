@@ -5,7 +5,7 @@ import { cache } from '../services/cache';
 import { AlertType, db } from '../services/db';
 import { scheduler } from '../services/scheduler';
 import { Coordinate } from '../types/coordinate';
-import { sortPyramids, sortBarbarians } from '../utils/distance';
+import { sortPyramids, sortBarbarians, sortByDistance } from '../utils/distance';
 import { formatPower } from '../utils/format';
 
 export interface Command {
@@ -93,7 +93,20 @@ const barbarianCommand: Command = {
       let coordinates = await fetchCoordinates('barbarian');
 
       if (coordinates.length === 0) {
-        await message.reply('⚠️ No Barbarian coordinates available at the moment.');
+        const status = scheduler.getCurrentStatus();
+        const embed = new EmbedBuilder()
+          .setTitle('🗡️ Barbarian Coordinates')
+          .setDescription('⚠️ No barbarian coordinates available at the moment.')
+          .setColor(0xff9900)
+          .addFields(
+            { name: '🔄 Next Update', value: `In **${Math.floor(status.timeUntilNext / 60)}m ${status.timeUntilNext % 60}s**`, inline: true },
+            { name: '📅 Auto-Crawl', value: 'Every 15 minutes', inline: true },
+            { name: '💡 Tip', value: 'Coordinates are automatically fetched from iScout.club\nTry again in a few minutes!', inline: false }
+          )
+          .setFooter({ text: 'Use !status to see the full crawl schedule' })
+          .setTimestamp();
+
+        await message.reply({ embeds: [embed] });
         return;
       }
 
@@ -216,31 +229,63 @@ const aresCommand: Command = {
     }
 
     try {
-      const coordinates = await fetchCoordinates('ares');
+      // 사용자 위치 확인
+      const userPosition = await db.getUserPosition(message.author.id);
+
+      let coordinates = await fetchCoordinates('ares');
 
       if (coordinates.length === 0) {
-        await message.reply('⚠️ No Ares coordinates available at the moment.');
+        const status = scheduler.getCurrentStatus();
+        const embed = new EmbedBuilder()
+          .setTitle('⚡ Ares Coordinates')
+          .setDescription('⚠️ No Ares coordinates available at the moment.')
+          .setColor(0xff9900)
+          .addFields(
+            { name: '🔄 Next Update', value: `In **${Math.floor(status.timeUntilNext / 60)}m ${status.timeUntilNext % 60}s**`, inline: true },
+            { name: '📅 Auto-Crawl', value: 'Every 15 minutes', inline: true },
+            { name: '💡 Tip', value: 'Ares coordinates are automatically fetched from iScout.club\nTry again in a few minutes!', inline: false }
+          )
+          .setFooter({ text: 'Use !status to see the full crawl schedule' })
+          .setTimestamp();
+
+        await message.reply({ embeds: [embed] });
         return;
+      }
+
+      // 거리순 정렬 (사용자 위치 있을 때)
+      let sortedCoordinates: (Coordinate & { distance?: number })[];
+      if (userPosition) {
+        sortedCoordinates = sortByDistance(coordinates, userPosition.x, userPosition.y);
+      } else {
+        sortedCoordinates = coordinates;
       }
 
       const embed = new EmbedBuilder()
         .setTitle('⚡ Ares Coordinates')
-        .setDescription(`Found ${coordinates.length} Ares`)
+        .setDescription(
+          `Found ${sortedCoordinates.length} Ares` +
+          (userPosition ? '\n📊 Sorted by: Distance ↑' : '\n\n💡 **Tip**: Use `!setpos <X> <Y>` to sort by distance')
+        )
         .setColor(0xffa500)
         .setTimestamp();
 
       // Add fields (Discord embed 최대 25개 필드 제한)
-      const maxDisplay = Math.min(coordinates.length, 25);
-      coordinates.slice(0, maxDisplay).forEach((coord, index) => {
+      const maxDisplay = Math.min(sortedCoordinates.length, 25);
+      sortedCoordinates.slice(0, maxDisplay).forEach((coord, index) => {
+        let value = `X: \`${coord.x}\` Y: \`${coord.y}\``;
+        if (coord.distance !== undefined) {
+          value += `\n📏 Distance: ${Math.round(coord.distance)}`;
+        }
+
         embed.addFields({
           name: `#${index + 1} - Lv${coord.level}`,
-          value: `X: \`${coord.x}\` Y: \`${coord.y}\``,
+          value,
           inline: true,
         });
       });
 
-      if (coordinates.length > maxDisplay) {
-        embed.setFooter({ text: `Showing ${maxDisplay}/${coordinates.length}` });
+      if (sortedCoordinates.length > maxDisplay) {
+        embed.setFooter({ text: `Showing ${maxDisplay}/${sortedCoordinates.length}` });
       }
 
       await message.reply({
@@ -268,7 +313,21 @@ const pyramidCommand: Command = {
       let coordinates = await fetchCoordinates('pyramid');
 
       if (coordinates.length === 0) {
-        await message.reply('⚠️ No Pyramid coordinates available at the moment.');
+        const status = scheduler.getCurrentStatus();
+        const embed = new EmbedBuilder()
+          .setTitle('🔺 Pyramid Coordinates')
+          .setDescription('⚠️ No pyramid coordinates available at the moment.')
+          .setColor(0xff9900)
+          .addFields(
+            { name: '🔄 Next Update', value: `In **${Math.floor(status.timeUntilNext / 60)}m ${status.timeUntilNext % 60}s**`, inline: true },
+            { name: '📅 Auto-Crawl', value: 'Every 15 minutes', inline: true },
+            { name: '🎯 Filter', value: 'Auto-filter: **Lv4, Lv5** only', inline: true },
+            { name: '💡 Tip', value: 'Pyramids are automatically fetched from iScout.club\nUse `!pyramid 5` to see Lv5 only', inline: false }
+          )
+          .setFooter({ text: 'Use !status to see the full crawl schedule' })
+          .setTimestamp();
+
+        await message.reply({ embeds: [embed] });
         return;
       }
 
@@ -281,7 +340,21 @@ const pyramidCommand: Command = {
           coordinates = coordinates.filter(c => c.level === level);
 
           if (coordinates.length === 0) {
-            await message.reply(`⚠️ No Level ${level} Pyramid coordinates available at the moment.`);
+            const status = scheduler.getCurrentStatus();
+            const totalCoords = (await fetchCoordinates('pyramid')).length;
+            const embed = new EmbedBuilder()
+              .setTitle(`🔺 Pyramid Coordinates - Level ${level}`)
+              .setDescription(`⚠️ No Level ${level} pyramids available at the moment.`)
+              .setColor(0xff9900)
+              .addFields(
+                { name: '📊 Total Pyramids', value: `${totalCoords} (all levels)`, inline: true },
+                { name: '🔄 Next Update', value: `In **${Math.floor(status.timeUntilNext / 60)}m ${status.timeUntilNext % 60}s**`, inline: true },
+                { name: '💡 Tip', value: `Try \`!pyramid\` to see all levels\nOr wait for the next update in ${Math.floor(status.timeUntilNext / 60)} minutes`, inline: false }
+              )
+              .setFooter({ text: 'Pyramids update every 15 minutes' })
+              .setTimestamp();
+
+            await message.reply({ embeds: [embed] });
             return;
           }
         } else if (!isNaN(level)) {
@@ -396,50 +469,88 @@ const aboutCommand: Command = {
   execute: async (message: Message) => {
     const embed = new EmbedBuilder()
       .setTitle('🤖 About Evony Bot')
-      .setDescription('Your automated assistant for finding Barbarian, Ares, and Pyramid coordinates in Evony!')
+      .setDescription('Your intelligent hunting companion for Evony - Automated crawling, Smart filtering, Distance optimization!')
       .setColor(0x5865F2)
       .addFields(
         {
-          name: '🌐 Where do coordinates come from?',
-          value: 'The bot automatically visits **iScout.club** website and collects the latest coordinates for you.',
+          name: '🌐 Data Source',
+          value: 'Automated **Puppeteer** web scraping from **iScout.club**\n' +
+            '• Stealth mode with anti-bot detection\n' +
+            '• Auto-login with session persistence\n' +
+            '• Cloudflare bypass capability',
           inline: false
         },
         {
-          name: '🔄 How often does it update?',
-          value: '• **When bot starts**: Fetches all coordinate types at once\n' +
-            '• **Every 5 minutes**: Updates one type in rotation\n' +
-            '• **Result**: Fresh data every 15 minutes for each type',
+          name: '🔄 Auto-Update System',
+          value: '**5-minute rotating schedule:**\n' +
+            '`0min` 🔺 Pyramid → `5min` 🗡️ Barbarian → `10min` ⚡ Ares → `15min` 🔺 Pyramid...\n' +
+            '→ Each type refreshes **every 15 minutes**\n' +
+            '→ Check current status with `!status`',
           inline: false
         },
         {
-          name: '📍 Smart Distance Sorting',
-          value: 'Tell the bot your city location with `!setpos X Y` and Pyramid results will show closest ones first!\n' +
-            '**Sorting**: Higher levels first, then sorted by distance to your city',
+          name: '🗡️ Barbarian Intelligence',
+          value: '**Premium features for barbarian hunting:**\n' +
+            '• Auto-filter: **Lv5, 6, 7 only**\n' +
+            '• `!bbpower 500M 2B` - Set your power range\n' +
+            '• **2-tier sorting**: Power ↓ → Distance ↑\n' +
+            '• Shows: Level, Power, Alliance, Distance',
           inline: false
         },
         {
-          name: '🔔 Personal Alerts',
-          value: 'Set up alerts like `!alert pyramid 5` and get a private message when new high-level targets appear!\n' +
-            '• Only alerts you about genuinely new targets (not duplicates)\n' +
-            '• Cleans up old alert history automatically',
+          name: '🔺 Pyramid Intelligence',
+          value: '**Optimized for ruin hunting:**\n' +
+            '• Auto-filter: **Lv4, 5 only**\n' +
+            '• `!pyramid 5` - Show Lv5 only\n' +
+            '• **2-tier sorting**: Level ↓ → Distance ↑\n' +
+            '• Perfect for finding nearby high-level ruins',
           inline: false
         },
         {
-          name: '💾 Your Data',
-          value: '• Your saved city coordinates are remembered permanently\n' +
-            '• Latest game coordinates are kept in memory\n' +
-            '• Your alert preferences are saved',
+          name: '⚡ Ares Features',
+          value: '**Quick and simple:**\n' +
+            '• Distance-based sorting\n' +
+            '• Use `!ares` or `!ar`\n' +
+            '• Auto-updates every 15 minutes',
           inline: false
         },
         {
-          name: '🛡️ Always Running',
-          value: '• Handles website security checks automatically\n' +
-            '• Reconnects if connection is lost\n' +
-            '• Restarts automatically if something goes wrong',
+          name: '📍 Position System',
+          value: '**Set your city location** (`!setpos X Y`):\n' +
+            '✅ All coordinates sorted by distance\n' +
+            '✅ Distance displayed for each target\n' +
+            '✅ Alert notifications include distance\n' +
+            '→ **Find the closest targets instantly!**',
+          inline: false
+        },
+        {
+          name: '🔔 Smart Alert System',
+          value: '**Get DM alerts** for new targets (`!alert <type> [level]`):\n' +
+            '• **Real-time**: Notified within 15 minutes\n' +
+            '• **Anti-spam**: Deduplication (±10 range, 24h)\n' +
+            '• **Filtered**: By level, distance, and power\n' +
+            '• **Persistent**: Settings saved per user',
+          inline: false
+        },
+        {
+          name: '💾 Database',
+          value: '**SQLite + Prisma** stores your preferences:\n' +
+            '• City coordinates (permanent)\n' +
+            '• Power ranges (per user)\n' +
+            '• Alert settings (customizable)\n' +
+            '• Alert history (anti-duplicate)',
+          inline: false
+        },
+        {
+          name: '🚀 Quick Start Guide',
+          value: '1️⃣ `!setpos 500 600` - Save your city location\n' +
+            '2️⃣ `!bbpower 300M 1B` - Set barbarian power filter\n' +
+            '3️⃣ `!alert barbarian 6` - Get alerts for Lv6+ barbarians\n' +
+            '4️⃣ `!bb` - View your personalized barbarian list!',
           inline: false
         }
       )
-      .setFooter({ text: 'Made with ❤️ for Evony players' })
+      .setFooter({ text: 'Tech: Puppeteer + Prisma + Discord.js | Data: iScout.club | Use !help for all commands' })
       .setTimestamp();
 
     await message.reply({ embeds: [embed] });
@@ -553,7 +664,7 @@ const setPositionCommand: Command = {
           { name: 'X Coordinate', value: x.toString(), inline: true },
           { name: 'Y Coordinate', value: y.toString(), inline: true }
         )
-        .setFooter({ text: 'Pyramid coordinates will now be sorted by distance from your position' })
+        .setFooter({ text: 'Pyramid, Barbarian, and Ares coordinates will now be sorted by distance' })
         .setTimestamp();
 
       await message.reply({ embeds: [embed] });
@@ -970,36 +1081,42 @@ const barbarianPowerCommand: Command = {
         const settings = await db.getBarbarianPower(message.author.id);
         
         if (!settings) {
-          await message.reply(
-            '⚔️ **Barbarian Power Range Settings**\n\n' +
-            'You have not set a power range yet.\n\n' +
-            '**Usage**: `!bbpower <min> <max>`\n' +
-            '**Example**: `!bbpower 500M 2B` (500M ~ 2B)\n' +
-            '**Units**: K (thousand), M (million), B (billion)\n\n' +
-            '**More examples**:\n' +
-            '• `!bbpower 100M 1B` - 100M to 1B\n' +
-            '• `!bbpower 1B 5B` - 1B to 5B'
-          );
+          const embed = new EmbedBuilder()
+            .setTitle('⚔️ Barbarian Power Range')
+            .setDescription('You have not set a power range yet.')
+            .setColor(0xffa500)
+            .addFields(
+              { name: '📖 Usage', value: '`!bbpower <min> <max>`', inline: false },
+              { name: '💡 Example', value: '`!bbpower 500M 2B`\n500M ~ 2B power range', inline: false },
+              { name: '📏 Units', value: 'K (thousand)\nM (million)\nB (billion)', inline: true },
+              { name: '📝 More Examples', value: '`!bbpower 100M 1B`\n`!bbpower 1B 5B`', inline: true }
+            )
+            .setFooter({ text: 'Set a power range to filter barbarian results' })
+            .setTimestamp();
+          
+          await message.reply({ embeds: [embed] });
           return;
         }
 
-        await message.reply(
-          `⚔️ **Your Barbarian Power Range**\n\n` +
-          `Min: **${formatPower(settings.minPower)}**\n` +
-          `Max: **${formatPower(settings.maxPower)}**\n\n` +
-          `Use \`!bbpower <min> <max>\` to change.`
-        );
+        const embed = new EmbedBuilder()
+          .setTitle('⚔️ Your Barbarian Power Range')
+          .setDescription('Current power filter settings')
+          .setColor(0x00ff00)
+          .addFields(
+            { name: 'Username', value: message.author.username, inline: true },
+            { name: 'Min Power', value: formatPower(settings.minPower), inline: true },
+            { name: 'Max Power', value: formatPower(settings.maxPower), inline: true }
+          )
+          .setFooter({ text: 'Use !bbpower <min> <max> to change your range' })
+          .setTimestamp();
+
+        await message.reply({ embeds: [embed] });
         return;
       }
 
       // 2개 인자 필요
       if (args.length !== 2) {
-        await message.reply(
-          '❌ Invalid format.\n\n' +
-          '**Usage**: `!bbpower <min> <max>`\n' +
-          '**Example**: `!bbpower 500M 2B`\n' +
-          '**Units**: K, M, B'
-        );
+        await message.reply('❌ Usage: `!bbpower <min> <max>`\nExample: `!bbpower 500M 2B`');
         return;
       }
 
@@ -1007,11 +1124,7 @@ const barbarianPowerCommand: Command = {
       const maxPower = parsePowerString(args[1]);
 
       if (minPower === null || maxPower === null) {
-        await message.reply(
-          '❌ Invalid power format.\n\n' +
-          '**Valid formats**: 100K, 500M, 1.5B\n' +
-          '**Units**: K (thousand), M (million), B (billion)'
-        );
+        await message.reply('❌ Invalid power format.\n**Valid formats**: 100K, 500M, 1.5B\n**Units**: K, M, B');
         return;
       }
 
@@ -1023,12 +1136,19 @@ const barbarianPowerCommand: Command = {
       // DB에 저장
       await db.setBarbarianPower(message.author.id, message.author.username, minPower, maxPower);
 
-      await message.reply(
-        `✅ **Barbarian power range set!**\n\n` +
-        `Min: **${formatPower(minPower)}**\n` +
-        `Max: **${formatPower(maxPower)}**\n\n` +
-        `Use \`!bb\` or \`!barbarian\` to see filtered results.`
-      );
+      const embed = new EmbedBuilder()
+        .setTitle('✅ Power Range Saved')
+        .setDescription('Your barbarian power range has been set successfully!')
+        .setColor(0x00ff00)
+        .addFields(
+          { name: 'Username', value: message.author.username, inline: true },
+          { name: 'Min Power', value: formatPower(minPower), inline: true },
+          { name: 'Max Power', value: formatPower(maxPower), inline: true }
+        )
+        .setFooter({ text: 'Use !bb or !barbarian to see filtered results' })
+        .setTimestamp();
+
+      await message.reply({ embeds: [embed] });
 
     } catch (error) {
       console.error('Failed to set barbarian power:', error);

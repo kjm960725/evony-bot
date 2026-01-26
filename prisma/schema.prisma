@@ -47,7 +47,7 @@ model SentAlert {
   discordId String // 디스코드 사용자 ID
   type      String // 좌표 타입: 'pyramid', 'barbarian', 'ares'
   level     Int // 좌표 레벨
-  power     Int? // 파워 (바바리안 등)
+  power     BigInt? // 파워 (바바리안 등)
   x         Int // X 좌표
   y         Int // Y 좌표
   sentAt    DateTime @default(now())

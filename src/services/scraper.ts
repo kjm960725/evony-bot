@@ -16,11 +16,11 @@ class ScraperService {
   private get ISCOUT_URL(): string {
     return process.env.ISCOUT_URL || 'https://www.iscout.club/en';
   }
-  
+
   private get ISCOUT_EMAIL(): string {
     return process.env.ISCOUT_EMAIL || '';
   }
-  
+
   private get ISCOUT_PASSWORD(): string {
     return process.env.ISCOUT_PASSWORD || '';
   }
@@ -34,11 +34,11 @@ class ScraperService {
       try {
         const path = require('path');
         const fs = require('fs');
-        
+
         // 설치된 Chrome 경로 찾기
         // 1. 환경 변수 우선 확인 (서버 배포용)
         let executablePath = process.env.PUPPETEER_EXECUTABLE_PATH || '';
-        
+
         // 2. Linux ARM64 시스템에서 시스템 Chromium 사용
         if (!executablePath && process.platform === 'linux' && process.arch === 'arm64') {
           const systemChromePaths = [
@@ -54,11 +54,11 @@ class ScraperService {
             }
           }
         }
-        
+
         // 3. 로컬 chrome 디렉토리 확인 (개발용)
         if (!executablePath) {
           const chromeDir = path.join(process.cwd(), 'chrome');
-          
+
           if (fs.existsSync(chromeDir)) {
             const versions = fs.readdirSync(chromeDir);
             if (versions.length > 0) {
@@ -75,21 +75,21 @@ class ScraperService {
             }
           }
         }
-        
+
         if (executablePath) {
           console.log('   Using Chrome:', executablePath);
         }
-        
+
         // M1/M2 Mac 호환 설정
         const userDataDir = path.join(process.cwd(), 'chrome-user-data');
-        
+
         // Headless 모드 결정
         // 환경 변수로 명시적 제어 가능, 기본값은 Linux만 headless
-        const isHeadless = process.env.PUPPETEER_HEADLESS === 'true' || 
-                          (process.env.PUPPETEER_HEADLESS !== 'false' && process.platform === 'linux');
-        
+        const isHeadless = process.env.PUPPETEER_HEADLESS === 'true' ||
+          (process.env.PUPPETEER_HEADLESS !== 'false' && process.platform === 'linux');
+
         console.log(`   Headless mode: ${isHeadless ? 'enabled' : 'disabled'}`);
-        
+
         this.browser = await puppeteer.launch({
           headless: isHeadless ? 'new' : false,  // 서버: headless, 로컬: 브라우저 창 표시
           executablePath: executablePath || undefined,
@@ -141,7 +141,7 @@ class ScraperService {
       await this.page.goto(`${this.ISCOUT_URL}/dashboard`, { waitUntil: 'networkidle2' });
 
       const currentUrl = this.page.url();
-      
+
       // 이미 대시보드에 있으면 로그인 성공
       if (currentUrl.includes('/dashboard')) {
         this.isLoggedIn = true;
@@ -157,43 +157,43 @@ class ScraperService {
       // 캡차 확인
       console.log('   Checking for Cloudflare challenge...');
       await this.page.waitForTimeout(2000);
-      
+
       // @ts-ignore - Running in browser context
       const hasCaptcha = await this.page.evaluate(() => {
-        return document.body.textContent?.includes('Verify you are human') || 
-               document.body.textContent?.includes('Cloudflare');
+        return document.body.textContent?.includes('Verify you are human') ||
+          document.body.textContent?.includes('Cloudflare');
       });
 
       if (hasCaptcha) {
         console.log('⚠️  Cloudflare challenge detected!');
         console.log('   Please solve the captcha manually in the browser window.');
         console.log('   Waiting up to 60 seconds for you to complete it...');
-        
+
         // 캡차 해결 대기 (최대 60초)
         let attempts = 0;
         const maxAttempts = 60;
-        
+
         while (attempts < maxAttempts) {
           await this.page.waitForTimeout(1000);
           attempts++;
-          
+
           const currentUrl = this.page.url();
           // @ts-ignore - Running in browser context
           const stillHasCaptcha = await this.page.evaluate(() => {
-            return document.body.textContent?.includes('Verify you are human') || 
-                   document.body.textContent?.includes('Cloudflare');
+            return document.body.textContent?.includes('Verify you are human') ||
+              document.body.textContent?.includes('Cloudflare');
           });
-          
+
           if (!stillHasCaptcha || currentUrl.includes('/login')) {
             console.log('✅ Captcha resolved!');
             break;
           }
-          
+
           if (attempts % 10 === 0) {
             console.log(`   Still waiting... (${attempts}/${maxAttempts} seconds)`);
           }
         }
-        
+
         if (attempts >= maxAttempts) {
           throw new Error('Captcha resolution timeout - please try again');
         }
@@ -213,12 +213,12 @@ class ScraperService {
 
       // 로그인 버튼 클릭 및 네비게이션 대기
       console.log('   Clicking login button...');
-      
+
       // @ts-ignore - Running in browser context
       // 폼 제출 또는 로그인 버튼 클릭
       await this.page.evaluate(() => {
         const buttons = Array.from(document.querySelectorAll('button'));
-        const loginButton = buttons.find((btn: any) => 
+        const loginButton = buttons.find((btn: any) =>
           btn.textContent?.toLowerCase().includes('log in') ||
           btn.textContent?.toLowerCase().includes('login')
         );
@@ -256,7 +256,7 @@ class ScraperService {
           const errorElement = document.querySelector('.text-red-600, .text-danger, [class*="error"]');
           return errorElement?.textContent?.trim() || 'Unknown error';
         });
-        
+
         await this.page.screenshot({ path: 'login-failed.png', fullPage: true });
         throw new Error(`Login failed: ${errorMessage}`);
       } else {
@@ -292,7 +292,7 @@ class ScraperService {
     }
 
     console.log('🔄 Preparing for scraping...');
-    
+
     // 1. 페이지 새로고침
     console.log('   Refreshing page...');
     await this.page.reload({ waitUntil: 'networkidle2' });
@@ -319,12 +319,12 @@ class ScraperService {
     // 3. List 버튼 클릭
     console.log('   Clicking List button...');
     await this.page.waitForTimeout(1000);
-    
+
     // @ts-ignore - Running in browser context
     const listButtonClicked = await this.page.evaluate(() => {
       const buttons = Array.from(document.querySelectorAll('button'));
-      const listButton = buttons.find((btn: any) => 
-        btn.textContent?.trim().includes('List') && 
+      const listButton = buttons.find((btn: any) =>
+        btn.textContent?.trim().includes('List') &&
         btn.querySelector('p')?.textContent?.trim() === 'List'
       );
       if (listButton) {
@@ -373,27 +373,27 @@ class ScraperService {
       const arcticBarbarianClicked = await this.page!.evaluate(() => {
         // 버튼들 중에서 "Arctic Barbarians" 텍스트가 포함된 것 찾기
         const buttons = Array.from(document.querySelectorAll('button, div[role="button"], span[role="button"]'));
-        const targetButton = buttons.find((btn: any) => 
+        const targetButton = buttons.find((btn: any) =>
           btn.textContent?.includes('Arctic Barbarians')
         );
-        
+
         if (targetButton) {
           (targetButton as any).click();
           return true;
         }
-        
+
         // 버튼이 아닌 div나 다른 요소일 수 있음
         const divs = Array.from(document.querySelectorAll('div, span, label'));
-        const targetDiv = divs.find((el: any) => 
+        const targetDiv = divs.find((el: any) =>
           el.textContent?.includes('Arctic Barbarians') &&
           el.onclick !== null
         );
-        
+
         if (targetDiv) {
           (targetDiv as any).click();
           return true;
         }
-        
+
         return false;
       });
 
@@ -406,129 +406,78 @@ class ScraperService {
         await this.page!.screenshot({ path: 'debug-barbarian-buttons.png', fullPage: true });
       }
 
-      // 2. Barbarian 레벨 5, 6, 7 선택 (키보드 입력 방식)
-      console.log('   Step 1: Selecting Lv5 by typing "5"...');
-      
-      // Arctic Barbarians input 찾아서 클릭
-      // @ts-ignore
-      await this.page!.evaluate(() => {
-        const legends = Array.from(document.querySelectorAll('legend'));
-        const barbarianLegend = legends.find((legend: any) => 
-          legend.textContent?.trim() === 'Arctic Barbarians'
+      // 2. "Presets list" 버튼 클릭
+      console.log('   Clicking "Presets list" button...');
+      // @ts-ignore - Running in browser context
+      const presetsListClicked = await this.page!.evaluate(() => {
+        const buttons = Array.from(document.querySelectorAll('button'));
+        const presetsButton = buttons.find((btn: any) =>
+          btn.textContent?.includes('Presets list')
         );
-        const barbarianSection = barbarianLegend?.closest('li');
-        const multiselectInput = barbarianSection?.querySelector('.multiselect__input') as HTMLInputElement;
-        if (multiselectInput) {
-          multiselectInput.focus();
-          multiselectInput.click();
+
+        if (presetsButton) {
+          (presetsButton as any).click();
+          return true;
         }
+        return false;
       });
-      
-      await this.page!.waitForTimeout(500);
-      
-      // "5" 입력
-      await this.page!.keyboard.type('5');
-      console.log('   Typed "5"');
-      await this.page!.waitForTimeout(800);
-      
-      // Tab 키를 눌러서 Lv5 선택
-      await this.page!.keyboard.press('Tab');
-      console.log('   Pressed Tab to select Lv5');
-      await this.page!.waitForTimeout(500);
-      
-      // 3. Barbarian 레벨 6 선택
-      console.log('   Step 2: Selecting Lv6 by typing "6"...');
-      
-      // 드롭다운 다시 클릭
-      // @ts-ignore
-      await this.page!.evaluate(() => {
-        const legends = Array.from(document.querySelectorAll('legend'));
-        const barbarianLegend = legends.find((legend: any) => 
-          legend.textContent?.trim() === 'Arctic Barbarians'
-        );
-        const barbarianSection = barbarianLegend?.closest('li');
-        const multiselectInput = barbarianSection?.querySelector('.multiselect__input') as HTMLInputElement;
-        if (multiselectInput) {
-          multiselectInput.focus();
-          multiselectInput.click();
+
+      if (presetsListClicked) {
+        console.log('   ✅ "Presets list" button clicked');
+        await this.page!.waitForTimeout(2000); // 드롭다운이 열릴 시간 충분히 대기
+      } else {
+        console.log('   ⚠️ "Presets list" button not found');
+        await this.page!.screenshot({ path: 'debug-presets-button.png', fullPage: true });
+      }
+
+      // 3. 드롭다운 메뉴에서 "EvonyBot" 프리셋 선택
+      console.log('   Selecting "EvonyBot" preset from dropdown...');
+      // @ts-ignore - Running in browser context
+      const presetResult = await this.page!.evaluate(() => {
+        // 더 넓은 범위로 검색
+        const allClickable = Array.from(document.querySelectorAll('li, a, button, div, span'));
+
+        // 디버깅: "Bot" 또는 "Preset"이 포함된 모든 요소 찾기
+        const relevantItems = allClickable
+          .filter((el: any) => {
+            const text = el.textContent?.trim() || '';
+            return text.includes('Bot') || text.includes('Preset') || text.includes('Evony');
+          })
+          .map((el: any) => el.textContent?.trim())
+          .filter((text: any, index: any, self: any) => text && self.indexOf(text) === index);
+
+        // EvonyBot 찾기 (여러 형태로 시도)
+        const evonyBotItem = allClickable.find((el: any) => {
+          const text = el.textContent?.trim() || '';
+          return text === 'EvonyBot' || text === 'Evony Bot' || text === 'evonybot';
+        });
+
+        if (evonyBotItem) {
+          (evonyBotItem as any).click();
+          return { success: true, relevantItems };
         }
+
+        return { success: false, relevantItems };
       });
-      
-      await this.page!.waitForTimeout(500);
-      
-      // 입력란의 "5" 삭제 (Backspace)
-      await this.page!.keyboard.press('Backspace');
-      console.log('   Cleared "5"');
-      await this.page!.waitForTimeout(300);
-      
-      // "6" 입력
-      await this.page!.keyboard.type('6');
-      console.log('   Typed "6"');
-      await this.page!.waitForTimeout(800);
-      
-      // Tab 키를 눌러서 Lv6 선택
-      await this.page!.keyboard.press('Tab');
-      console.log('   Pressed Tab to select Lv6');
-      await this.page!.waitForTimeout(500);
-      
-      // 4. Barbarian 레벨 7 선택
-      console.log('   Step 3: Selecting Lv7 by typing "7"...');
-      
-      // 드롭다운 다시 클릭
-      // @ts-ignore
-      await this.page!.evaluate(() => {
-        const legends = Array.from(document.querySelectorAll('legend'));
-        const barbarianLegend = legends.find((legend: any) => 
-          legend.textContent?.trim() === 'Arctic Barbarians'
-        );
-        const barbarianSection = barbarianLegend?.closest('li');
-        const multiselectInput = barbarianSection?.querySelector('.multiselect__input') as HTMLInputElement;
-        if (multiselectInput) {
-          multiselectInput.focus();
-          multiselectInput.click();
-        }
-      });
-      
-      await this.page!.waitForTimeout(500);
-      
-      // 입력란의 "6" 삭제 (Backspace)
-      await this.page!.keyboard.press('Backspace');
-      console.log('   Cleared "6"');
-      await this.page!.waitForTimeout(300);
-      
-      // "7" 입력
-      await this.page!.keyboard.type('7');
-      console.log('   Typed "7"');
-      await this.page!.waitForTimeout(800);
-      
-      // Tab 키를 눌러서 Lv7 선택
-      await this.page!.keyboard.press('Tab');
-      console.log('   Pressed Tab to select Lv7');
-      await this.page!.waitForTimeout(500);
-      
-      // 선택된 항목 확인
-      // @ts-ignore
-      const selectedTags = await this.page!.evaluate(() => {
-        const legends = Array.from(document.querySelectorAll('legend'));
-        const barbarianLegend = legends.find((legend: any) => 
-          legend.textContent?.trim() === 'Arctic Barbarians'
-        );
-        const barbarianSection = barbarianLegend?.closest('li');
-        const tags = barbarianSection?.querySelectorAll('.multiselect__tag span');
-        return Array.from(tags || []).map((tag: any) => tag.textContent?.trim());
-      });
-      
-      console.log('   Selected barbarian levels:', selectedTags);
+
+      if (presetResult.success) {
+        console.log('   ✅ "EvonyBot" preset selected');
+        await this.page!.waitForTimeout(1000);
+      } else {
+        console.log('   ⚠️ "EvonyBot" preset not found in dropdown');
+        console.log('   Relevant items found:', presetResult.relevantItems);
+        await this.page!.screenshot({ path: 'debug-preset-dropdown-barbarian.png', fullPage: true });
+      }
 
       // 5. "Apply" 버튼 클릭
       console.log('   Clicking "Apply" button...');
       // @ts-ignore - Running in browser context
       const applyClicked = await this.page!.evaluate(() => {
         const buttons = Array.from(document.querySelectorAll('button'));
-        const applyButton = buttons.find((btn: any) => 
+        const applyButton = buttons.find((btn: any) =>
           btn.textContent?.toLowerCase().includes('apply')
         );
-        
+
         if (applyButton) {
           (applyButton as any).click();
           return true;
@@ -540,7 +489,7 @@ class ScraperService {
         console.log('   ✅ "Apply" button clicked');
         console.log('   Waiting 15 seconds for results to load...');
         await this.page!.waitForTimeout(15000);
-        
+
         // 페이지를 아래로 스크롤하여 모든 데이터 로드 (가상 스크롤 대응)
         console.log('   Scrolling page to load all data...');
         await this.page!.evaluate(async () => {
@@ -559,7 +508,7 @@ class ScraperService {
             }, 200);
           });
         });
-        
+
         console.log('   Waiting 3 seconds after scroll...');
         await this.page!.waitForTimeout(3000);
       } else {
@@ -574,7 +523,7 @@ class ScraperService {
         const results: any[] = [];
         const debugInfo: any[] = [];
         const levelCounts: { [key: number]: number } = {};
-        
+
         // iScout 테이블 행 찾기
         const rows = document.querySelectorAll('tr');
 
@@ -583,81 +532,81 @@ class ScraperService {
             // 아이템 이름 찾기 (Barbarian이 포함된 텍스트)
             const itemDiv = row.querySelector('div[data-tooltip-id*="clickboard_data"]');
             const itemText = itemDiv?.textContent?.trim() || '';
-            
+
             // 처음 50개 행의 정보 수집 (디버깅용)
             if (index < 50 && itemText) {
               debugInfo.push({ index, itemText: itemText.substring(0, 60) });
             }
-            
+
             // Barbarian이 아니면 스킵
             if (!itemText.includes('Barbarian')) {
               return;
             }
-            
+
             // 레벨 추출하여 카운트
             const levelMatch = itemText.match(/Lv(\d+)/i) || itemText.match(/Level\s*(\d+)/i);
             if (levelMatch) {
               const level = parseInt(levelMatch[1]);
               levelCounts[level] = (levelCounts[level] || 0) + 1;
             }
-            
+
             // 좌표 찾기 - data-tooltip-id 속성으로
             let xMatch = null;
             let yMatch = null;
-            
+
             // data-tooltip-id에 _x 또는 _y가 포함된 요소 찾기
             const allDivs = row.querySelectorAll('div[data-tooltip-id]');
             for (const div of allDivs) {
               const tooltipId = (div as any).getAttribute('data-tooltip-id') || '';
               const divText = (div as any).textContent?.trim() || '';
-              
+
               if (tooltipId.includes('_x') && !xMatch) {
                 const test = divText.match(/X:\s*(\d+)/);
                 if (test) xMatch = test;
               }
-              
+
               if (tooltipId.includes('_y') && !yMatch) {
                 const test = divText.match(/Y:\s*(\d+)/);
                 if (test) yMatch = test;
               }
-              
+
               if (xMatch && yMatch) break;
             }
-            
+
             // 좌표를 찾지 못하면 스킵
             if (!xMatch || !yMatch) {
               return;
             }
-            
+
             if (xMatch && yMatch) {
               const x = parseInt(xMatch[1]);
               const y = parseInt(yMatch[1]);
-              
+
               // 레벨 추출 - "Lv4 Barbarian" -> 4 또는 "Barbarian Lv4" -> 4
               const levelMatch = itemText.match(/Lv(\d+)/i) || itemText.match(/Level\s*(\d+)/i);
               const level = levelMatch ? parseInt(levelMatch[1]) : 0;
-              
+
               // 레벨 5, 6, 7만 수집 (다른 레벨은 무시)
               if (level !== 5 && level !== 6 && level !== 7) {
                 return;
               }
-              
+
               // 파워 정보 추출
               // 형태: "500M", "1.2B", "Power: 500M" 등
               let power = undefined;
-              
+
               // 테이블의 모든 셀에서 파워 정보 찾기
               const cells = row.querySelectorAll('td, div');
               for (const cell of cells) {
                 const cellText = (cell as any).textContent?.trim() || '';
-                
+
                 // "500M", "1.2B" 형태 찾기 (M = Million, B = Billion)
                 const powerMatch = cellText.match(/([0-9.]+)\s*([MB])/i);
-                
+
                 if (powerMatch) {
                   const numValue = parseFloat(powerMatch[1]);
                   const unit = powerMatch[2].toUpperCase();
-                  
+
                   if (!isNaN(numValue) && numValue > 0) {
                     // M = 1,000,000 (백만), B = 1,000,000,000 (십억)
                     if (unit === 'M') {
@@ -669,11 +618,11 @@ class ScraperService {
                   }
                 }
               }
-              
+
               // Alliance 정보 추출 (있는 경우)
               const allianceDiv = row.querySelector('[data-tooltip-id*="alliance"]');
               const alliance = allianceDiv?.textContent?.trim() || undefined;
-              
+
               results.push({
                 x: x,
                 y: y,
@@ -696,13 +645,13 @@ class ScraperService {
 
     } catch (error) {
       console.error('❌ Barbarian scraping failed:', error);
-      
+
       // 에러 발생 시 디버그 정보 저장
       if (this.page) {
         await this.page.screenshot({ path: 'barbarian-error.png', fullPage: true });
         console.log('   💾 Error screenshot saved: barbarian-error.png');
       }
-      
+
       console.log('⚠️ Returning empty array (no mock data)');
       return [];
     }
@@ -716,28 +665,204 @@ class ScraperService {
     await this.prepareForScraping(); // 매번 새로고침 + 로그인 확인 + List 버튼 클릭
 
     try {
-      // Ares 페이지로 이동
-      // TODO: 실제 URL로 교체
-      await this.page!.goto(`${this.ISCOUT_URL}/ares`, { waitUntil: 'networkidle2' });
+      // 1. "Ares" 버튼 클릭 (해당하는 카테고리 버튼 찾기)
+      console.log('   Clicking Ares category button...');
+      // @ts-ignore - Running in browser context
+      const aresClicked = await this.page!.evaluate(() => {
+        const buttons = Array.from(document.querySelectorAll('button, div[role="button"], span[role="button"]'));
+        const targetButton = buttons.find((btn: any) =>
+          btn.textContent?.includes('Ares') || btn.textContent?.includes('ares')
+        );
 
-      await this.page!.waitForTimeout(2000);
+        if (targetButton) {
+          (targetButton as any).click();
+          return true;
+        }
 
+        const divs = Array.from(document.querySelectorAll('div, span, label'));
+        const targetDiv = divs.find((el: any) =>
+          el.textContent?.includes('Ares') &&
+          el.onclick !== null
+        );
+
+        if (targetDiv) {
+          (targetDiv as any).click();
+          return true;
+        }
+
+        return false;
+      });
+
+      if (aresClicked) {
+        console.log('   ✅ Ares button clicked');
+        await this.page!.waitForTimeout(1000);
+      } else {
+        console.log('   ⚠️ Ares button not found');
+        await this.page!.screenshot({ path: 'debug-ares-buttons.png', fullPage: true });
+      }
+
+      // 2. "Presets list" 버튼 클릭
+      console.log('   Clicking "Presets list" button...');
+      // @ts-ignore - Running in browser context
+      const presetsListClicked = await this.page!.evaluate(() => {
+        const buttons = Array.from(document.querySelectorAll('button'));
+        const presetsButton = buttons.find((btn: any) =>
+          btn.textContent?.includes('Presets list')
+        );
+
+        if (presetsButton) {
+          (presetsButton as any).click();
+          return true;
+        }
+        return false;
+      });
+
+      if (presetsListClicked) {
+        console.log('   ✅ "Presets list" button clicked');
+        await this.page!.waitForTimeout(2000); // 드롭다운이 열릴 시간 충분히 대기
+      } else {
+        console.log('   ⚠️ "Presets list" button not found');
+        await this.page!.screenshot({ path: 'debug-presets-button.png', fullPage: true });
+      }
+
+      // 3. 드롭다운 메뉴에서 "EvonyBot" 프리셋 선택
+      console.log('   Selecting "EvonyBot" preset from dropdown...');
+      // @ts-ignore - Running in browser context
+      const presetResult = await this.page!.evaluate(() => {
+        // 더 넓은 범위로 검색
+        const allClickable = Array.from(document.querySelectorAll('li, a, button, div, span'));
+
+        // 디버깅: "Bot" 또는 "Preset"이 포함된 모든 요소 찾기
+        const relevantItems = allClickable
+          .filter((el: any) => {
+            const text = el.textContent?.trim() || '';
+            return text.includes('Bot') || text.includes('Preset') || text.includes('Evony');
+          })
+          .map((el: any) => el.textContent?.trim())
+          .filter((text: any, index: any, self: any) => text && self.indexOf(text) === index);
+
+        // EvonyBot 찾기 (여러 형태로 시도)
+        const evonyBotItem = allClickable.find((el: any) => {
+          const text = el.textContent?.trim() || '';
+          return text === 'EvonyBot' || text === 'Evony Bot' || text === 'evonybot';
+        });
+
+        if (evonyBotItem) {
+          (evonyBotItem as any).click();
+          return { success: true, relevantItems };
+        }
+
+        return { success: false, relevantItems };
+      });
+
+      if (presetResult.success) {
+        console.log('   ✅ "EvonyBot" preset selected');
+        await this.page!.waitForTimeout(1000);
+      } else {
+        console.log('   ⚠️ "EvonyBot" preset not found in dropdown');
+        console.log('   Relevant items found:', presetResult.relevantItems);
+        await this.page!.screenshot({ path: 'debug-preset-dropdown-ares.png', fullPage: true });
+      }
+
+      // 4. "Apply" 버튼 클릭
+      console.log('   Clicking "Apply" button...');
+      // @ts-ignore - Running in browser context
+      const applyClicked = await this.page!.evaluate(() => {
+        const buttons = Array.from(document.querySelectorAll('button'));
+        const applyButton = buttons.find((btn: any) =>
+          btn.textContent?.toLowerCase().includes('apply')
+        );
+
+        if (applyButton) {
+          (applyButton as any).click();
+          return true;
+        }
+        return false;
+      });
+
+      if (applyClicked) {
+        console.log('   ✅ "Apply" button clicked');
+        console.log('   Waiting 15 seconds for results to load...');
+        await this.page!.waitForTimeout(15000);
+
+        // 페이지를 아래로 스크롤하여 모든 데이터 로드
+        console.log('   Scrolling page to load all data...');
+        await this.page!.evaluate(async () => {
+          await new Promise<void>((resolve) => {
+            let totalHeight = 0;
+            const distance = 500;
+            const timer = setInterval(() => {
+              const scrollHeight = document.body.scrollHeight;
+              window.scrollBy(0, distance);
+              totalHeight += distance;
+
+              if (totalHeight >= scrollHeight) {
+                clearInterval(timer);
+                resolve();
+              }
+            }, 200);
+          });
+        });
+
+        console.log('   Waiting 3 seconds after scroll...');
+        await this.page!.waitForTimeout(3000);
+      } else {
+        console.log('   ⚠️ "Apply" button not found');
+        await this.page!.screenshot({ path: 'debug-apply-button.png', fullPage: true });
+      }
+
+      // 5. 좌표 데이터 추출
+      console.log('   Extracting coordinates from table...');
+      // @ts-ignore - Running in browser context
       const coordinates = await this.page!.evaluate(() => {
         const results: any[] = [];
-        // @ts-ignore - Running in browser context
-        const rows = document.querySelectorAll('.coordinate-row, tr.ares, table tr');
+        const rows = document.querySelectorAll('tr');
 
         rows.forEach((row: any) => {
           try {
-            const xText = row.querySelector('.x, .coord-x, td:nth-child(1)')?.textContent;
-            const yText = row.querySelector('.y, .coord-y, td:nth-child(2)')?.textContent;
-            const levelText = row.querySelector('.level, td:nth-child(3)')?.textContent;
+            // 아이템 이름 찾기 (Ares가 포함된 텍스트)
+            const itemDiv = row.querySelector('div[data-tooltip-id*="clickboard_data"]');
+            const itemText = itemDiv?.textContent?.trim() || '';
 
-            if (xText && yText) {
+            // Ares가 아니면 스킵
+            if (!itemText.includes('Ares') && !itemText.includes('ares')) {
+              return;
+            }
+
+            // 좌표 찾기 - data-tooltip-id 속성으로
+            let xMatch = null;
+            let yMatch = null;
+
+            const allDivs = row.querySelectorAll('div[data-tooltip-id]');
+            for (const div of allDivs) {
+              const tooltipId = (div as any).getAttribute('data-tooltip-id') || '';
+              const divText = (div as any).textContent?.trim() || '';
+
+              if (tooltipId.includes('_x') && !xMatch) {
+                const test = divText.match(/X:\s*(\d+)/);
+                if (test) xMatch = test;
+              }
+
+              if (tooltipId.includes('_y') && !yMatch) {
+                const test = divText.match(/Y:\s*(\d+)/);
+                if (test) yMatch = test;
+              }
+
+              if (xMatch && yMatch) break;
+            }
+
+            if (xMatch && yMatch) {
+              const x = parseInt(xMatch[1]);
+              const y = parseInt(yMatch[1]);
+
+              // 레벨 추출
+              const levelMatch = itemText.match(/Lv(\d+)/i) || itemText.match(/Level\s*(\d+)/i);
+              const level = levelMatch ? parseInt(levelMatch[1]) : 0;
+
               results.push({
-                x: parseInt(xText.replace(/\D/g, '')),
-                y: parseInt(yText.replace(/\D/g, '')),
-                level: levelText ? parseInt(levelText.replace(/\D/g, '')) : 0,
+                x: x,
+                y: y,
+                level: level,
                 timestamp: new Date().toISOString(),
               });
             }
@@ -754,6 +879,12 @@ class ScraperService {
 
     } catch (error) {
       console.error('❌ Ares scraping failed:', error);
+
+      if (this.page) {
+        await this.page.screenshot({ path: 'ares-error.png', fullPage: true });
+        console.log('   💾 Error screenshot saved: ares-error.png');
+      }
+
       console.log('⚠️ Returning empty array (no mock data)');
       return [];
     }
@@ -773,29 +904,29 @@ class ScraperService {
       const relicsPyramidsClicked = await this.page!.evaluate(() => {
         // 버튼들 중에서 "Relics/Pyramids" 텍스트가 포함된 것 찾기
         const buttons = Array.from(document.querySelectorAll('button'));
-        const targetButton = buttons.find((btn: any) => 
+        const targetButton = buttons.find((btn: any) =>
           btn.textContent?.includes('Relics/Pyramids') ||
           btn.textContent?.includes('Relics') ||
           btn.textContent?.includes('Pyramids')
         );
-        
+
         if (targetButton) {
           (targetButton as any).click();
           return true;
         }
-        
+
         // 버튼이 아닌 div나 다른 요소일 수 있음
         const divs = Array.from(document.querySelectorAll('div, span, label'));
-        const targetDiv = divs.find((el: any) => 
+        const targetDiv = divs.find((el: any) =>
           el.textContent?.includes('Relics/Pyramids') &&
           el.onclick !== null
         );
-        
+
         if (targetDiv) {
           (targetDiv as any).click();
           return true;
         }
-        
+
         return false;
       });
 
@@ -808,94 +939,78 @@ class ScraperService {
         await this.page!.screenshot({ path: 'debug-pyramid-buttons.png', fullPage: true });
       }
 
-      // 2. Pyramid 레벨 5 선택 (키보드 입력 방식)
-      console.log('   Step 1: Selecting Lv5 by typing "5"...');
-      
-      // Pyramids input 찾아서 클릭
-      // @ts-ignore
-      await this.page!.evaluate(() => {
-        const legends = Array.from(document.querySelectorAll('legend'));
-        const pyramidLegend = legends.find((legend: any) => 
-          legend.textContent?.trim() === 'Pyramids'
+      // 2. "Presets list" 버튼 클릭
+      console.log('   Clicking "Presets list" button...');
+      // @ts-ignore - Running in browser context
+      const presetsListClicked = await this.page!.evaluate(() => {
+        const buttons = Array.from(document.querySelectorAll('button'));
+        const presetsButton = buttons.find((btn: any) =>
+          btn.textContent?.includes('Presets list')
         );
-        const pyramidSection = pyramidLegend?.closest('li');
-        const multiselectInput = pyramidSection?.querySelector('.multiselect__input') as HTMLInputElement;
-        if (multiselectInput) {
-          multiselectInput.focus();
-          multiselectInput.click();
-        }
-      });
-      
-      await this.page!.waitForTimeout(500);
-      
-      // "5" 입력
-      await this.page!.keyboard.type('5');
-      console.log('   Typed "5"');
-      await this.page!.waitForTimeout(800);
-      
-      // Tab 키를 눌러서 Lv5 선택
-      await this.page!.keyboard.press('Tab');
-      console.log('   Pressed Tab to select Lv5');
-      await this.page!.waitForTimeout(500);
-      
-      // 3. Pyramid 레벨 4 선택 (키보드 입력 방식)
-      console.log('   Step 2: Selecting Lv4 by typing "4"...');
-      
-      // 드롭다운 다시 클릭
-      // @ts-ignore
-      await this.page!.evaluate(() => {
-        const legends = Array.from(document.querySelectorAll('legend'));
-        const pyramidLegend = legends.find((legend: any) => 
-          legend.textContent?.trim() === 'Pyramids'
-        );
-        const pyramidSection = pyramidLegend?.closest('li');
-        const multiselectInput = pyramidSection?.querySelector('.multiselect__input') as HTMLInputElement;
-        if (multiselectInput) {
-          multiselectInput.focus();
-          multiselectInput.click();
-        }
-      });
-      
-      await this.page!.waitForTimeout(500);
-      
-      // 입력란의 "5" 삭제 (Backspace)
-      await this.page!.keyboard.press('Backspace');
-      console.log('   Cleared "5"');
-      await this.page!.waitForTimeout(300);
-      
-      // "4" 입력
-      await this.page!.keyboard.type('4');
-      console.log('   Typed "4"');
-      await this.page!.waitForTimeout(800);
-      
-      // Tab 키를 눌러서 Lv4 선택
-      await this.page!.keyboard.press('Tab');
-      console.log('   Pressed Tab to select Lv4');
-      await this.page!.waitForTimeout(500);
-      
-      // 선택된 항목 확인
-      // @ts-ignore
-      const selectedTags = await this.page!.evaluate(() => {
-        const legends = Array.from(document.querySelectorAll('legend'));
-        const pyramidLegend = legends.find((legend: any) => 
-          legend.textContent?.trim() === 'Pyramids'
-        );
-        const pyramidSection = pyramidLegend?.closest('li');
-        const tags = pyramidSection?.querySelectorAll('.multiselect__tag span');
-        return Array.from(tags || []).map((tag: any) => tag.textContent?.trim());
-      });
-      
-      console.log('   Selected pyramid levels:', selectedTags);
 
-      // 3. Apply 버튼 클릭
+        if (presetsButton) {
+          (presetsButton as any).click();
+          return true;
+        }
+        return false;
+      });
+
+      if (presetsListClicked) {
+        console.log('   ✅ "Presets list" button clicked');
+        await this.page!.waitForTimeout(2000); // 드롭다운이 열릴 시간 충분히 대기
+      } else {
+        console.log('   ⚠️ "Presets list" button not found');
+        await this.page!.screenshot({ path: 'debug-presets-button.png', fullPage: true });
+      }
+
+      // 3. 드롭다운 메뉴에서 "EvonyBot" 프리셋 선택
+      console.log('   Selecting "EvonyBot" preset from dropdown...');
+      // @ts-ignore - Running in browser context
+      const presetResult = await this.page!.evaluate(() => {
+        // 더 넓은 범위로 검색
+        const allClickable = Array.from(document.querySelectorAll('li, a, button, div, span'));
+
+        // 디버깅: "Bot" 또는 "Preset"이 포함된 모든 요소 찾기
+        const relevantItems = allClickable
+          .filter((el: any) => {
+            const text = el.textContent?.trim() || '';
+            return text.includes('Bot') || text.includes('Preset') || text.includes('Evony');
+          })
+          .map((el: any) => el.textContent?.trim())
+          .filter((text: any, index: any, self: any) => text && self.indexOf(text) === index);
+
+        // EvonyBot 찾기 (여러 형태로 시도)
+        const evonyBotItem = allClickable.find((el: any) => {
+          const text = el.textContent?.trim() || '';
+          return text === 'EvonyBot' || text === 'Evony Bot' || text === 'evonybot';
+        });
+
+        if (evonyBotItem) {
+          (evonyBotItem as any).click();
+          return { success: true, relevantItems };
+        }
+
+        return { success: false, relevantItems };
+      });
+
+      if (presetResult.success) {
+        console.log('   ✅ "EvonyBot" preset selected');
+        await this.page!.waitForTimeout(1000);
+      } else {
+        console.log('   ⚠️ "EvonyBot" preset not found in dropdown');
+        console.log('   Relevant items found:', presetResult.relevantItems);
+        await this.page!.screenshot({ path: 'debug-preset-dropdown-pyramid.png', fullPage: true });
+      }
+
+      // 4. Apply 버튼 클릭
       console.log('   Clicking "Apply" button...');
       // @ts-ignore - Running in browser context
       const applyClicked = await this.page!.evaluate(() => {
         const buttons = Array.from(document.querySelectorAll('button'));
-        const applyButton = buttons.find((btn: any) => 
+        const applyButton = buttons.find((btn: any) =>
           btn.textContent?.toLowerCase().includes('apply')
         );
-        
+
         if (applyButton) {
           (applyButton as any).click();
           return true;
@@ -907,7 +1022,7 @@ class ScraperService {
         console.log('   ✅ "Apply" button clicked');
         console.log('   Waiting 15 seconds for results to load...');
         await this.page!.waitForTimeout(15000);
-        
+
         // 페이지를 아래로 스크롤하여 모든 데이터 로드 (가상 스크롤 대응)
         console.log('   Scrolling page to load all data...');
         await this.page!.evaluate(async () => {
@@ -926,7 +1041,7 @@ class ScraperService {
             }, 200);
           });
         });
-        
+
         console.log('   Waiting 3 seconds after scroll...');
         await this.page!.waitForTimeout(3000);
       } else {
@@ -941,7 +1056,7 @@ class ScraperService {
         const results: any[] = [];
         const debugInfo: any[] = [];
         const levelCounts: { [key: number]: number } = {};
-        
+
         // iScout 테이블 행 찾기
         const rows = document.querySelectorAll('tr');
 
@@ -950,50 +1065,50 @@ class ScraperService {
             // 아이템 이름 찾기 (Pyramid가 포함된 텍스트)
             const itemDiv = row.querySelector('div[data-tooltip-id*="clickboard_data"]');
             const itemText = itemDiv?.textContent?.trim() || '';
-            
+
             // 처음 50개 행의 정보 수집 (디버깅용)
             if (index < 50 && itemText) {
               debugInfo.push({ index, itemText: itemText.substring(0, 60) });
             }
-            
+
             // Pyramid가 아니면 스킵
             if (!itemText.includes('Pyramid')) {
               return;
             }
-            
+
             // 레벨 추출하여 카운트
             const levelMatch = itemText.match(/Lv(\d+)/);
             if (levelMatch) {
               const level = parseInt(levelMatch[1]);
               levelCounts[level] = (levelCounts[level] || 0) + 1;
             }
-            
+
             // X 좌표 찾기 - data-tooltip-id에 _x가 포함된 요소
             const xDiv = row.querySelector('[data-tooltip-id$="_x"]');
             const xText = xDiv?.textContent?.trim() || '';
-            
+
             // Y 좌표 찾기 - data-tooltip-id에 _y가 포함된 요소 (첫 번째 것 선택)
             const yDivs = row.querySelectorAll('[data-tooltip-id$="_y"]');
             // 첫 번째 _y 요소가 실제 Y 좌표 (두 번째는 XY 복사 버튼)
             const yText = yDivs[0]?.textContent?.trim() || '';
-            
+
             // "X: 868" -> 868, "Y: 970" -> 970 형태에서 숫자 추출
             const xMatch = xText.match(/X:\s*(\d+)/);
             const yMatch = yText.match(/Y:\s*(\d+)/);
-            
+
             if (xMatch && yMatch) {
               const x = parseInt(xMatch[1]);
               const y = parseInt(yMatch[1]);
-              
+
               // 레벨 추출 - "Lv4 Pyramid Ruins" -> 4
               const levelMatch = itemText.match(/Lv(\d+)/);
               const level = levelMatch ? parseInt(levelMatch[1]) : 0;
-              
+
               // 레벨 4, 5만 수집 (다른 레벨은 무시)
               if (level !== 4 && level !== 5) {
                 return;
               }
-              
+
               results.push({
                 x: x,
                 y: y,
@@ -1010,18 +1125,18 @@ class ScraperService {
       });
 
       console.log(`✅ Found ${coordinates.length} Pyramid coordinates (Lv4, Lv5 only)`);
-      
+
       return coordinates;
 
     } catch (error) {
       console.error('❌ Pyramid scraping failed:', error);
-      
+
       // 에러 발생 시 디버그 정보 저장
       if (this.page) {
         await this.page.screenshot({ path: 'pyramid-error.png', fullPage: true });
         console.log('   💾 Error screenshot saved: pyramid-error.png');
       }
-      
+
       console.log('⚠️ Returning empty array (no mock data)');
       return [];
     }
@@ -1042,10 +1157,10 @@ class ScraperService {
       // 순차적으로 크롤링 (동시 실행 시 페이지 navigation 충돌 방지)
       console.log('1️⃣ Scraping Pyramid...');
       const pyramid = await this.scrapePyramid();
-      
+
       console.log('2️⃣ Scraping Barbarian...');
       const barbarian = await this.scrapeBarbarian();
-      
+
       console.log('3️⃣ Scraping Ares...');
       const ares = await this.scrapeAres();
 
