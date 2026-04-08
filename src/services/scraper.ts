@@ -1,4 +1,3 @@
-
 // Puppeteer Scraper Service
 import { Browser, Page } from "puppeteer";
 import puppeteer from "puppeteer-extra";
@@ -142,8 +141,8 @@ class ScraperService {
 
       this.page = await this.browser!.newPage();
 
-      // 데스크톱 뷰포트 고정 (모바일 레이아웃 방지)
-      await this.page.setViewport({ width: 1920, height: 1080 });
+      // 데스크톱 뷰포트 고정 (모바일 레이아웃 방지 + 테이블 전체 행 렌더링)
+      await this.page.setViewport({ width: 1920, height: 10000 });
 
       // User agent 설정 (봇 감지 방지)
       await this.page.setUserAgent(
@@ -383,9 +382,7 @@ class ScraperService {
   ): Promise<boolean> {
     const buttons = await this.page!.$$("button");
     for (const button of buttons) {
-      const text = await button.evaluate(
-        (el) => el.textContent?.trim() || "",
-      );
+      const text = await button.evaluate((el) => el.textContent?.trim() || "");
       if (matchFn(text)) {
         await button.evaluate((el) =>
           el.scrollIntoView({ block: "center", inline: "nearest" }),
@@ -405,12 +402,13 @@ class ScraperService {
   ): Promise<boolean> {
     const elements = await this.page!.$$(selector);
     for (const el of elements) {
-      const text = await el.evaluate(
-        (node) => node.textContent?.trim() || "",
-      );
+      const text = await el.evaluate((node) => node.textContent?.trim() || "");
       if (text.includes(textMatch)) {
         await el.evaluate((node) =>
-          (node as HTMLElement).scrollIntoView({ block: "center", inline: "nearest" }),
+          (node as HTMLElement).scrollIntoView({
+            block: "center",
+            inline: "nearest",
+          }),
         );
         await this.page!.waitForTimeout(500);
         await el.click();
@@ -501,81 +499,87 @@ class ScraperService {
   }
 
   /**
-   * 가상 스크롤 테이블에서 모든 행 데이터를 추출.
-   * 테이블 스크롤 컨테이너를 찾아 점진적으로 스크롤하며
-   * DOM에 렌더링된 행을 누적 수집한다 (좌표 기반 중복 제거).
+   * 테이블의 "List : N" 버튼을 클릭하여 페이지당 행 수를 100으로 변경.
+   * iScout UI: 버튼 텍스트 "List : 25" → 클릭 → 드롭다운 25/50/100 → "100" 클릭.
    */
-  private async scrollAndExtractRows(
-    extractFn: () => { key: string; data: any }[],
-  ): Promise<any[]> {
-    const collected = new Map<string, any>();
+  private async setRowsPerPage100(): Promise<void> {
+    console.log("   Setting rows per page to 100...");
 
-    // 현재 보이는 행 추출
-    const extractVisible = async () => {
-      const rows = await this.page!.evaluate(extractFn);
-      for (const { key, data } of rows) {
-        if (!collected.has(key)) collected.set(key, data);
-      }
-    };
+    // "List : N" 버튼 찾아서 JS click
+    const btnInfo = await this.page!.evaluate(() => {
+      const buttons = Array.from(document.querySelectorAll("button"));
+      const btn = buttons.find((b) =>
+        /List\s*:\s*\d+/.test(b.textContent?.trim() || ""),
+      );
+      if (!btn) return null;
+      const text = btn.textContent?.trim() || "";
+      if (text.includes("100")) return { text, alreadyMax: true };
+      btn.click();
+      return { text, alreadyMax: false };
+    });
 
-    // 테이블 스크롤 컨테이너 찾기 + 스크롤
-    const scrollContainer = await this.page!.evaluate(() => {
-      const table = document.querySelector('table');
-      if (!table) return null;
-      let el: HTMLElement | null = table.parentElement;
-      while (el) {
-        const style = getComputedStyle(el);
-        if (
-          (style.overflow === 'auto' || style.overflow === 'scroll' ||
-           style.overflowY === 'auto' || style.overflowY === 'scroll') &&
-          el.scrollHeight > el.clientHeight
-        ) {
-          el.setAttribute('data-scraper-scroll', 'true');
-          return { scrollHeight: el.scrollHeight, clientHeight: el.clientHeight };
+    if (!btnInfo) {
+      console.log("   ⚠️ 'List : N' button not found");
+      return;
+    }
+
+    if (btnInfo.alreadyMax) {
+      console.log("   ✅ Already set to 100");
+      return;
+    }
+
+    console.log(`   Current: "${btnInfo.text}", changing to 100...`);
+    await this.page!.waitForTimeout(5000);
+
+    // 드롭다운에서 "100" JS click (leaf 노드 중 텍스트가 정확히 "100"인 것)
+    const selected = await this.page!.evaluate(() => {
+      const allEls = Array.from(document.querySelectorAll("*"));
+      for (const el of allEls) {
+        const text = (el.textContent || "").trim();
+        if (text === "100" && el.children.length === 0) {
+          (el as HTMLElement).click();
+          return { tag: el.tagName, cls: el.className };
         }
-        el = el.parentElement;
       }
       return null;
     });
 
-    if (!scrollContainer) {
-      await extractVisible();
-      return Array.from(collected.values());
+    if (selected) {
+      console.log(
+        `   ✅ Selected 100 rows per page (${selected.tag}.${selected.cls})`,
+      );
+      console.log("   Waiting 10 seconds for table reload...");
+      await this.page!.waitForTimeout(10000);
+    } else {
+      console.log("   ⚠️ '100' option not found in dropdown");
+      // 디버그: 버튼 다시 클릭하고 DOM 트리 출력
+      await this.page!.evaluate(() => {
+        const buttons = Array.from(document.querySelectorAll("button"));
+        const btn = buttons.find((b) =>
+          /List\s*:\s*\d+/.test(b.textContent?.trim() || ""),
+        );
+        btn?.click();
+      });
+      await this.page!.waitForTimeout(1000);
+      const debug = await this.page!.evaluate(() => {
+        const allEls = Array.from(document.querySelectorAll("*"));
+        return allEls
+          .filter((el) => {
+            const t = (el.textContent || "").trim();
+            return (
+              (t === "25" || t === "50" || t === "100") &&
+              el.children.length === 0
+            );
+          })
+          .map((el) => ({
+            tag: el.tagName,
+            cls: (el.className || "").substring(0, 80),
+            text: (el.textContent || "").trim(),
+            visible: (el as HTMLElement).offsetParent !== null,
+          }));
+      });
+      console.log("   📋 Dropdown candidates:", JSON.stringify(debug));
     }
-
-    // 스크롤 컨테이너를 점진적으로 스크롤하며 행 수집
-    const step = Math.floor(scrollContainer.clientHeight * 0.8);
-    let scrollTop = 0;
-    let stableCount = 0;
-
-    for (let i = 0; i < 50; i++) {
-      await extractVisible();
-
-      const prevSize = collected.size;
-      await this.page!.evaluate((scrollAmount: number) => {
-        const container = document.querySelector('[data-scraper-scroll="true"]');
-        if (container) container.scrollTop = scrollAmount;
-      }, scrollTop);
-      await this.page!.waitForTimeout(800);
-      scrollTop += step;
-
-      await extractVisible();
-
-      if (collected.size === prevSize) {
-        stableCount++;
-        if (stableCount >= 3) break;
-      } else {
-        stableCount = 0;
-      }
-    }
-
-    // 스크롤 마커 제거
-    await this.page!.evaluate(() => {
-      const el = document.querySelector('[data-scraper-scroll="true"]');
-      if (el) el.removeAttribute('data-scraper-scroll');
-    });
-
-    return Array.from(collected.values());
   }
 
   // Apply 버튼 클릭 및 결과 대기
@@ -590,89 +594,13 @@ class ScraperService {
       console.log("   Waiting 15 seconds for results to load...");
       await this.page!.waitForTimeout(15000);
 
-      // Rows per page를 최대값(100)으로 변경
-      console.log("   Setting rows per page to max...");
-      const rowsChanged = await this.page!.evaluate(() => {
-        // 방법1: <select> 요소 찾기 (MUI TablePagination 등)
-        const selects = Array.from(document.querySelectorAll('select'));
-        for (const select of selects) {
-          const options = Array.from(select.options);
-          const has100 = options.find(o => o.value === '100' || o.text.trim() === '100');
-          if (has100) {
-            select.value = has100.value;
-            select.dispatchEvent(new Event('change', { bubbles: true }));
-            return { method: 'select', value: has100.value };
-          }
-          // 최대값 옵션 선택
-          const maxOpt = options.reduce((max, o) => {
-            const n = parseInt(o.value);
-            return !isNaN(n) && n > parseInt(max.value) ? o : max;
-          }, options[0]);
-          if (maxOpt && parseInt(maxOpt.value) > 25) {
-            select.value = maxOpt.value;
-            select.dispatchEvent(new Event('change', { bubbles: true }));
-            return { method: 'select-max', value: maxOpt.value };
-          }
-        }
-        // 방법2: aria-label이나 class로 찾기
-        const paginationSelect = document.querySelector('[class*="rowsPerPage"] select, [class*="pageSize"] select, [aria-label*="rows per page"]');
-        if (paginationSelect && paginationSelect instanceof HTMLSelectElement) {
-          const opts = Array.from(paginationSelect.options);
-          const max = opts[opts.length - 1];
-          if (max) {
-            paginationSelect.value = max.value;
-            paginationSelect.dispatchEvent(new Event('change', { bubbles: true }));
-            return { method: 'pagination-select', value: max.value };
-          }
-        }
-        return null;
-      });
+      // 페이지당 행 수를 100으로 변경 (커스텀 드롭다운 대응)
+      await this.setRowsPerPage100();
 
-      if (rowsChanged) {
-        console.log(`   ✅ Rows per page changed: ${JSON.stringify(rowsChanged)}`);
-        console.log("   Waiting 5 seconds for table reload...");
-        await this.page!.waitForTimeout(5000);
-      } else {
-        console.log("   ⚠️ Rows per page selector not found");
-        // 디버그: 페이지의 select 요소 정보 출력
-        const debugSelects = await this.page!.evaluate(() => {
-          const selects = Array.from(document.querySelectorAll('select'));
-          return selects.map(s => ({
-            id: s.id, className: s.className,
-            options: Array.from(s.options).map(o => ({ val: o.value, text: o.text.trim() })),
-          }));
-        });
-        if (debugSelects.length > 0) {
-          console.log(`   📋 Found ${debugSelects.length} select(s):`, JSON.stringify(debugSelects));
-        }
-      }
-
-      console.log("   Scrolling page to load all data...");
-      let scrollPass = 0;
-      let prevHeight = 0;
-      while (scrollPass < 20) {
-        scrollPass++;
-        await this.page!.evaluate(async () => {
-          await new Promise<void>((resolve) => {
-            let totalHeight = 0;
-            const distance = 500;
-            const timer = setInterval(() => {
-              const scrollHeight = document.body.scrollHeight;
-              window.scrollBy(0, distance);
-              totalHeight += distance;
-              if (totalHeight >= scrollHeight) {
-                clearInterval(timer);
-                resolve();
-              }
-            }, 200);
-          });
-        });
-        await this.page!.waitForTimeout(2000);
-        const currentHeight = await this.page!.evaluate(() => document.body.scrollHeight);
-        if (currentHeight === prevHeight) break;
-        prevHeight = currentHeight;
-      }
-      console.log(`   Scroll complete (${scrollPass} pass${scrollPass > 1 ? 'es' : ''})`);
+      const rowCount = await this.page!.evaluate(
+        () => document.querySelectorAll("tr").length,
+      );
+      console.log(`   📋 Table rows in DOM: ${rowCount}`);
       return true;
     } else {
       console.log('   ⚠️ "Apply" button not found');
@@ -720,14 +648,16 @@ class ScraperService {
       // 4. Apply 클릭 및 결과 대기
       await this.clickApplyAndWait();
 
-      // 5. 좌표 데이터 추출
+      // 5. 좌표 데이터 추출 (뷰포트 10000px로 모든 행이 DOM에 렌더링됨)
       console.log("   Extracting coordinates from table...");
-      const allRows = await this.scrollAndExtractRows(() => {
-        const results: { key: string; data: any }[] = [];
+      const coordinates = await this.page!.evaluate(() => {
+        const results: any[] = [];
         const rows = document.querySelectorAll("tr");
         rows.forEach((row: any) => {
           try {
-            const itemDiv = row.querySelector('div[data-tooltip-id*="clickboard_data"]');
+            const itemDiv = row.querySelector(
+              'div[data-tooltip-id*="clickboard_data"]',
+            );
             const itemText = itemDiv?.textContent?.trim() || "";
             if (!itemText.includes("Barbarian")) return;
 
@@ -735,7 +665,8 @@ class ScraperService {
             let yMatch = null;
             const allDivs = row.querySelectorAll("div[data-tooltip-id]");
             for (const div of allDivs) {
-              const tooltipId = (div as any).getAttribute("data-tooltip-id") || "";
+              const tooltipId =
+                (div as any).getAttribute("data-tooltip-id") || "";
               const divText = (div as any).textContent?.trim() || "";
               if (tooltipId.includes("_x") && !xMatch) {
                 const test = divText.match(/X:\s*(\d+)/);
@@ -751,7 +682,8 @@ class ScraperService {
 
             const x = parseInt(xMatch[1]);
             const y = parseInt(yMatch[1]);
-            const levelMatch = itemText.match(/Lv(\d+)/i) || itemText.match(/Level\s*(\d+)/i);
+            const levelMatch =
+              itemText.match(/Lv(\d+)/i) || itemText.match(/Level\s*(\d+)/i);
             const level = levelMatch ? parseInt(levelMatch[1]) : 0;
             if (level !== 5 && level !== 6 && level !== 7) return;
 
@@ -764,26 +696,37 @@ class ScraperService {
                 const numValue = parseFloat(powerMatch[1]);
                 const unit = powerMatch[2].toUpperCase();
                 if (!isNaN(numValue) && numValue > 0) {
-                  power = unit === "M" ? Math.round(numValue * 1000000) : Math.round(numValue * 1000000000);
+                  power =
+                    unit === "M"
+                      ? Math.round(numValue * 1000000)
+                      : Math.round(numValue * 1000000000);
                   break;
                 }
               }
             }
 
-            const allianceDiv = row.querySelector('[data-tooltip-id*="alliance"]');
+            const allianceDiv = row.querySelector(
+              '[data-tooltip-id*="alliance"]',
+            );
             const alliance = allianceDiv?.textContent?.trim() || undefined;
 
             results.push({
-              key: `barb_${x}_${y}`,
-              data: { x, y, level, power, alliance, timestamp: new Date().toISOString() },
+              x,
+              y,
+              level,
+              power,
+              alliance,
+              timestamp: new Date().toISOString(),
             });
           } catch (e) {}
         });
         return results;
       });
 
-      console.log(`✅ Found ${allRows.length} Barbarian coordinates (Lv5, Lv6, Lv7 only)`);
-      return allRows;
+      console.log(
+        `✅ Found ${coordinates.length} Barbarian coordinates (Lv5, Lv6, Lv7 only)`,
+      );
+      return coordinates;
     } catch (error) {
       console.error("❌ Barbarian scraping failed:", error);
 
@@ -818,30 +761,35 @@ class ScraperService {
       await this.clickApplyAndWait();
 
       console.log("   Extracting monster coordinates from table...");
-      const allRows = await this.scrollAndExtractRows(() => {
-        const results: { key: string; data: any }[] = [];
+      const result = await this.page!.evaluate(() => {
+        const ares: any[] = [];
+        const witch: any[] = [];
+        const goblin: any[] = [];
         const rows = document.querySelectorAll("tr");
         rows.forEach((row: any) => {
           try {
-            const itemDiv = row.querySelector('div[data-tooltip-id*="clickboard_data"]');
+            const itemDiv = row.querySelector(
+              'div[data-tooltip-id*="clickboard_data"]',
+            );
             const itemText = itemDiv?.textContent?.trim() || "";
             if (!itemText) return;
 
-            let type: string | null = null;
+            let targetArray: any[] | null = null;
             if (itemText.includes("Ares") || itemText.includes("ares")) {
-              type = "ares";
+              targetArray = ares;
             } else if (itemText.includes("Witch")) {
-              type = "witch";
+              targetArray = witch;
             } else if (itemText.includes("Goblin")) {
-              type = "goblin";
+              targetArray = goblin;
             }
-            if (!type) return;
+            if (!targetArray) return;
 
             let xMatch = null;
             let yMatch = null;
             const allDivs = row.querySelectorAll("div[data-tooltip-id]");
             for (const div of allDivs) {
-              const tooltipId = (div as any).getAttribute("data-tooltip-id") || "";
+              const tooltipId =
+                (div as any).getAttribute("data-tooltip-id") || "";
               const divText = (div as any).textContent?.trim() || "";
               if (tooltipId.includes("_x") && !xMatch) {
                 const test = divText.match(/X:\s*(\d+)/);
@@ -857,23 +805,20 @@ class ScraperService {
             if (xMatch && yMatch) {
               const x = parseInt(xMatch[1]);
               const y = parseInt(yMatch[1]);
-              const levelMatch = itemText.match(/Lv(\d+)/i) || itemText.match(/Level\s*(\d+)/i);
+              const levelMatch =
+                itemText.match(/Lv(\d+)/i) || itemText.match(/Level\s*(\d+)/i);
               const level = levelMatch ? parseInt(levelMatch[1]) : 0;
-              results.push({
-                key: `${type}_${x}_${y}`,
-                data: { x, y, level, type, timestamp: new Date().toISOString() },
+              targetArray.push({
+                x,
+                y,
+                level,
+                timestamp: new Date().toISOString(),
               });
             }
           } catch (e) {}
         });
-        return results;
+        return { ares, witch, goblin };
       });
-
-      const result = {
-        ares: allRows.filter((r: any) => r.type === "ares").map(({ type, ...rest }: any) => rest),
-        witch: allRows.filter((r: any) => r.type === "witch").map(({ type, ...rest }: any) => rest),
-        goblin: allRows.filter((r: any) => r.type === "goblin").map(({ type, ...rest }: any) => rest),
-      };
 
       console.log(
         `✅ Monsters scrape done — Ares: ${result.ares.length}, Witch: ${result.witch.length}, Goblin: ${result.goblin.length}`,
@@ -914,10 +859,7 @@ class ScraperService {
             text.includes("Relics") ||
             text.includes("Pyramids"),
         )) ||
-        (await this.clickElementByText(
-          "div, span, label",
-          "Relics/Pyramids",
-        ));
+        (await this.clickElementByText("div, span, label", "Relics/Pyramids"));
 
       if (relicsPyramidsClicked) {
         console.log('   ✅ "Relics/Pyramids" button clicked');
@@ -933,14 +875,16 @@ class ScraperService {
       // 4. Apply 클릭 및 결과 대기
       await this.clickApplyAndWait();
 
-      // 5. 좌표 데이터 추출
+      // 5. 좌표 데이터 추출 (뷰포트 10000px로 모든 행이 DOM에 렌더링됨)
       console.log("   Extracting coordinates from table...");
-      const allRows = await this.scrollAndExtractRows(() => {
-        const results: { key: string; data: any }[] = [];
+      const coordinates = await this.page!.evaluate(() => {
+        const results: any[] = [];
         const rows = document.querySelectorAll("tr");
         rows.forEach((row: any) => {
           try {
-            const itemDiv = row.querySelector('div[data-tooltip-id*="clickboard_data"]');
+            const itemDiv = row.querySelector(
+              'div[data-tooltip-id*="clickboard_data"]',
+            );
             const itemText = itemDiv?.textContent?.trim() || "";
             if (!itemText.includes("Pyramid")) return;
 
@@ -959,17 +903,16 @@ class ScraperService {
             const level = levelMatch ? parseInt(levelMatch[1]) : 0;
             if (level !== 4 && level !== 5) return;
 
-            results.push({
-              key: `pyr_${x}_${y}`,
-              data: { x, y, level, timestamp: new Date().toISOString() },
-            });
+            results.push({ x, y, level, timestamp: new Date().toISOString() });
           } catch (e) {}
         });
         return results;
       });
 
-      console.log(`✅ Found ${allRows.length} Pyramid coordinates (Lv4, Lv5 only)`);
-      return allRows;
+      console.log(
+        `✅ Found ${coordinates.length} Pyramid coordinates (Lv4, Lv5 only)`,
+      );
+      return coordinates;
     } catch (error) {
       console.error("❌ Pyramid scraping failed:", error);
 
