@@ -142,6 +142,9 @@ class ScraperService {
 
       this.page = await this.browser!.newPage();
 
+      // 데스크톱 뷰포트 고정 (모바일 레이아웃 방지)
+      await this.page.setViewport({ width: 1920, height: 1080 });
+
       // User agent 설정 (봇 감지 방지)
       await this.page.setUserAgent(
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -497,6 +500,84 @@ class ScraperService {
     return false;
   }
 
+  /**
+   * 가상 스크롤 테이블에서 모든 행 데이터를 추출.
+   * 테이블 스크롤 컨테이너를 찾아 점진적으로 스크롤하며
+   * DOM에 렌더링된 행을 누적 수집한다 (좌표 기반 중복 제거).
+   */
+  private async scrollAndExtractRows(
+    extractFn: () => { key: string; data: any }[],
+  ): Promise<any[]> {
+    const collected = new Map<string, any>();
+
+    // 현재 보이는 행 추출
+    const extractVisible = async () => {
+      const rows = await this.page!.evaluate(extractFn);
+      for (const { key, data } of rows) {
+        if (!collected.has(key)) collected.set(key, data);
+      }
+    };
+
+    // 테이블 스크롤 컨테이너 찾기 + 스크롤
+    const scrollContainer = await this.page!.evaluate(() => {
+      const table = document.querySelector('table');
+      if (!table) return null;
+      let el: HTMLElement | null = table.parentElement;
+      while (el) {
+        const style = getComputedStyle(el);
+        if (
+          (style.overflow === 'auto' || style.overflow === 'scroll' ||
+           style.overflowY === 'auto' || style.overflowY === 'scroll') &&
+          el.scrollHeight > el.clientHeight
+        ) {
+          el.setAttribute('data-scraper-scroll', 'true');
+          return { scrollHeight: el.scrollHeight, clientHeight: el.clientHeight };
+        }
+        el = el.parentElement;
+      }
+      return null;
+    });
+
+    if (!scrollContainer) {
+      await extractVisible();
+      return Array.from(collected.values());
+    }
+
+    // 스크롤 컨테이너를 점진적으로 스크롤하며 행 수집
+    const step = Math.floor(scrollContainer.clientHeight * 0.8);
+    let scrollTop = 0;
+    let stableCount = 0;
+
+    for (let i = 0; i < 50; i++) {
+      await extractVisible();
+
+      const prevSize = collected.size;
+      await this.page!.evaluate((scrollAmount: number) => {
+        const container = document.querySelector('[data-scraper-scroll="true"]');
+        if (container) container.scrollTop = scrollAmount;
+      }, scrollTop);
+      await this.page!.waitForTimeout(800);
+      scrollTop += step;
+
+      await extractVisible();
+
+      if (collected.size === prevSize) {
+        stableCount++;
+        if (stableCount >= 3) break;
+      } else {
+        stableCount = 0;
+      }
+    }
+
+    // 스크롤 마커 제거
+    await this.page!.evaluate(() => {
+      const el = document.querySelector('[data-scraper-scroll="true"]');
+      if (el) el.removeAttribute('data-scraper-scroll');
+    });
+
+    return Array.from(collected.values());
+  }
+
   // Apply 버튼 클릭 및 결과 대기
   private async clickApplyAndWait(): Promise<boolean> {
     console.log('   Clicking "Apply" button...');
@@ -509,25 +590,89 @@ class ScraperService {
       console.log("   Waiting 15 seconds for results to load...");
       await this.page!.waitForTimeout(15000);
 
-      console.log("   Scrolling page to load all data...");
-      await this.page!.evaluate(async () => {
-        await new Promise<void>((resolve) => {
-          let totalHeight = 0;
-          const distance = 500;
-          const timer = setInterval(() => {
-            const scrollHeight = document.body.scrollHeight;
-            window.scrollBy(0, distance);
-            totalHeight += distance;
-            if (totalHeight >= scrollHeight) {
-              clearInterval(timer);
-              resolve();
-            }
-          }, 200);
-        });
+      // Rows per page를 최대값(100)으로 변경
+      console.log("   Setting rows per page to max...");
+      const rowsChanged = await this.page!.evaluate(() => {
+        // 방법1: <select> 요소 찾기 (MUI TablePagination 등)
+        const selects = Array.from(document.querySelectorAll('select'));
+        for (const select of selects) {
+          const options = Array.from(select.options);
+          const has100 = options.find(o => o.value === '100' || o.text.trim() === '100');
+          if (has100) {
+            select.value = has100.value;
+            select.dispatchEvent(new Event('change', { bubbles: true }));
+            return { method: 'select', value: has100.value };
+          }
+          // 최대값 옵션 선택
+          const maxOpt = options.reduce((max, o) => {
+            const n = parseInt(o.value);
+            return !isNaN(n) && n > parseInt(max.value) ? o : max;
+          }, options[0]);
+          if (maxOpt && parseInt(maxOpt.value) > 25) {
+            select.value = maxOpt.value;
+            select.dispatchEvent(new Event('change', { bubbles: true }));
+            return { method: 'select-max', value: maxOpt.value };
+          }
+        }
+        // 방법2: aria-label이나 class로 찾기
+        const paginationSelect = document.querySelector('[class*="rowsPerPage"] select, [class*="pageSize"] select, [aria-label*="rows per page"]');
+        if (paginationSelect && paginationSelect instanceof HTMLSelectElement) {
+          const opts = Array.from(paginationSelect.options);
+          const max = opts[opts.length - 1];
+          if (max) {
+            paginationSelect.value = max.value;
+            paginationSelect.dispatchEvent(new Event('change', { bubbles: true }));
+            return { method: 'pagination-select', value: max.value };
+          }
+        }
+        return null;
       });
 
-      console.log("   Waiting 3 seconds after scroll...");
-      await this.page!.waitForTimeout(3000);
+      if (rowsChanged) {
+        console.log(`   ✅ Rows per page changed: ${JSON.stringify(rowsChanged)}`);
+        console.log("   Waiting 5 seconds for table reload...");
+        await this.page!.waitForTimeout(5000);
+      } else {
+        console.log("   ⚠️ Rows per page selector not found");
+        // 디버그: 페이지의 select 요소 정보 출력
+        const debugSelects = await this.page!.evaluate(() => {
+          const selects = Array.from(document.querySelectorAll('select'));
+          return selects.map(s => ({
+            id: s.id, className: s.className,
+            options: Array.from(s.options).map(o => ({ val: o.value, text: o.text.trim() })),
+          }));
+        });
+        if (debugSelects.length > 0) {
+          console.log(`   📋 Found ${debugSelects.length} select(s):`, JSON.stringify(debugSelects));
+        }
+      }
+
+      console.log("   Scrolling page to load all data...");
+      let scrollPass = 0;
+      let prevHeight = 0;
+      while (scrollPass < 20) {
+        scrollPass++;
+        await this.page!.evaluate(async () => {
+          await new Promise<void>((resolve) => {
+            let totalHeight = 0;
+            const distance = 500;
+            const timer = setInterval(() => {
+              const scrollHeight = document.body.scrollHeight;
+              window.scrollBy(0, distance);
+              totalHeight += distance;
+              if (totalHeight >= scrollHeight) {
+                clearInterval(timer);
+                resolve();
+              }
+            }, 200);
+          });
+        });
+        await this.page!.waitForTimeout(2000);
+        const currentHeight = await this.page!.evaluate(() => document.body.scrollHeight);
+        if (currentHeight === prevHeight) break;
+        prevHeight = currentHeight;
+      }
+      console.log(`   Scroll complete (${scrollPass} pass${scrollPass > 1 ? 'es' : ''})`);
       return true;
     } else {
       console.log('   ⚠️ "Apply" button not found');
@@ -577,139 +722,68 @@ class ScraperService {
 
       // 5. 좌표 데이터 추출
       console.log("   Extracting coordinates from table...");
-      // @ts-ignore - Running in browser context
-      const coordinates = await this.page!.evaluate(() => {
-        const results: any[] = [];
-        const debugInfo: any[] = [];
-        const levelCounts: { [key: number]: number } = {};
-
-        // iScout 테이블 행 찾기
+      const allRows = await this.scrollAndExtractRows(() => {
+        const results: { key: string; data: any }[] = [];
         const rows = document.querySelectorAll("tr");
-
-        rows.forEach((row: any, index: number) => {
+        rows.forEach((row: any) => {
           try {
-            // 아이템 이름 찾기 (Barbarian이 포함된 텍스트)
-            const itemDiv = row.querySelector(
-              'div[data-tooltip-id*="clickboard_data"]',
-            );
+            const itemDiv = row.querySelector('div[data-tooltip-id*="clickboard_data"]');
             const itemText = itemDiv?.textContent?.trim() || "";
+            if (!itemText.includes("Barbarian")) return;
 
-            // 처음 50개 행의 정보 수집 (디버깅용)
-            if (index < 50 && itemText) {
-              debugInfo.push({ index, itemText: itemText.substring(0, 60) });
-            }
-
-            // Barbarian이 아니면 스킵
-            if (!itemText.includes("Barbarian")) {
-              return;
-            }
-
-            // 레벨 추출하여 카운트
-            const levelMatch =
-              itemText.match(/Lv(\d+)/i) || itemText.match(/Level\s*(\d+)/i);
-            if (levelMatch) {
-              const level = parseInt(levelMatch[1]);
-              levelCounts[level] = (levelCounts[level] || 0) + 1;
-            }
-
-            // 좌표 찾기 - data-tooltip-id 속성으로
             let xMatch = null;
             let yMatch = null;
-
-            // data-tooltip-id에 _x 또는 _y가 포함된 요소 찾기
             const allDivs = row.querySelectorAll("div[data-tooltip-id]");
             for (const div of allDivs) {
-              const tooltipId =
-                (div as any).getAttribute("data-tooltip-id") || "";
+              const tooltipId = (div as any).getAttribute("data-tooltip-id") || "";
               const divText = (div as any).textContent?.trim() || "";
-
               if (tooltipId.includes("_x") && !xMatch) {
                 const test = divText.match(/X:\s*(\d+)/);
                 if (test) xMatch = test;
               }
-
               if (tooltipId.includes("_y") && !yMatch) {
                 const test = divText.match(/Y:\s*(\d+)/);
                 if (test) yMatch = test;
               }
-
               if (xMatch && yMatch) break;
             }
+            if (!xMatch || !yMatch) return;
 
-            // 좌표를 찾지 못하면 스킵
-            if (!xMatch || !yMatch) {
-              return;
-            }
+            const x = parseInt(xMatch[1]);
+            const y = parseInt(yMatch[1]);
+            const levelMatch = itemText.match(/Lv(\d+)/i) || itemText.match(/Level\s*(\d+)/i);
+            const level = levelMatch ? parseInt(levelMatch[1]) : 0;
+            if (level !== 5 && level !== 6 && level !== 7) return;
 
-            if (xMatch && yMatch) {
-              const x = parseInt(xMatch[1]);
-              const y = parseInt(yMatch[1]);
-
-              // 레벨 추출 - "Lv4 Barbarian" -> 4 또는 "Barbarian Lv4" -> 4
-              const levelMatch =
-                itemText.match(/Lv(\d+)/i) || itemText.match(/Level\s*(\d+)/i);
-              const level = levelMatch ? parseInt(levelMatch[1]) : 0;
-
-              // 레벨 5, 6, 7만 수집 (다른 레벨은 무시)
-              if (level !== 5 && level !== 6 && level !== 7) {
-                return;
-              }
-
-              // 파워 정보 추출
-              // 형태: "500M", "1.2B", "Power: 500M" 등
-              let power = undefined;
-
-              // 테이블의 모든 셀에서 파워 정보 찾기
-              const cells = row.querySelectorAll("td, div");
-              for (const cell of cells) {
-                const cellText = (cell as any).textContent?.trim() || "";
-
-                // "500M", "1.2B" 형태 찾기 (M = Million, B = Billion)
-                const powerMatch = cellText.match(/([0-9.]+)\s*([MB])/i);
-
-                if (powerMatch) {
-                  const numValue = parseFloat(powerMatch[1]);
-                  const unit = powerMatch[2].toUpperCase();
-
-                  if (!isNaN(numValue) && numValue > 0) {
-                    // M = 1,000,000 (백만), B = 1,000,000,000 (십억)
-                    if (unit === "M") {
-                      power = Math.round(numValue * 1000000);
-                    } else if (unit === "B") {
-                      power = Math.round(numValue * 1000000000);
-                    }
-                    break;
-                  }
+            let power = undefined;
+            const cells = row.querySelectorAll("td, div");
+            for (const cell of cells) {
+              const cellText = (cell as any).textContent?.trim() || "";
+              const powerMatch = cellText.match(/([0-9.]+)\s*([MB])/i);
+              if (powerMatch) {
+                const numValue = parseFloat(powerMatch[1]);
+                const unit = powerMatch[2].toUpperCase();
+                if (!isNaN(numValue) && numValue > 0) {
+                  power = unit === "M" ? Math.round(numValue * 1000000) : Math.round(numValue * 1000000000);
+                  break;
                 }
               }
-
-              // Alliance 정보 추출 (있는 경우)
-              const allianceDiv = row.querySelector(
-                '[data-tooltip-id*="alliance"]',
-              );
-              const alliance = allianceDiv?.textContent?.trim() || undefined;
-
-              results.push({
-                x: x,
-                y: y,
-                level: level,
-                power: power,
-                alliance: alliance,
-                timestamp: new Date().toISOString(),
-              });
             }
-          } catch (e) {
-            // Skip invalid rows
-          }
-        });
 
-        return { results, debugInfo, levelCounts, totalRows: rows.length };
+            const allianceDiv = row.querySelector('[data-tooltip-id*="alliance"]');
+            const alliance = allianceDiv?.textContent?.trim() || undefined;
+
+            results.push({
+              key: `barb_${x}_${y}`,
+              data: { x, y, level, power, alliance, timestamp: new Date().toISOString() },
+            });
+          } catch (e) {}
+        });
+        return results;
       });
 
-      console.log(
-        `✅ Found ${coordinates.results.length} Barbarian coordinates (Lv5, Lv6, Lv7 only)`,
-      );
-      return coordinates.results;
+      console.log(`✅ Found ${allRows.length} Barbarian coordinates (Lv5, Lv6, Lv7 only)`);
+      return allRows;
     } catch (error) {
       console.error("❌ Barbarian scraping failed:", error);
 
@@ -744,44 +818,30 @@ class ScraperService {
       await this.clickApplyAndWait();
 
       console.log("   Extracting monster coordinates from table...");
-      // @ts-ignore - Running in browser context
-      const result = await this.page!.evaluate(() => {
-        const ares: any[] = [];
-        const witch: any[] = [];
-        const goblin: any[] = [];
+      const allRows = await this.scrollAndExtractRows(() => {
+        const results: { key: string; data: any }[] = [];
         const rows = document.querySelectorAll("tr");
-
         rows.forEach((row: any) => {
           try {
-            const itemDiv = row.querySelector(
-              'div[data-tooltip-id*="clickboard_data"]',
-            );
+            const itemDiv = row.querySelector('div[data-tooltip-id*="clickboard_data"]');
             const itemText = itemDiv?.textContent?.trim() || "";
             if (!itemText) return;
 
-            // 타입 분류
-            let targetArray: any[] | null = null;
+            let type: string | null = null;
             if (itemText.includes("Ares") || itemText.includes("ares")) {
-              targetArray = ares;
-            } else if (
-              itemText.includes("Mysterious Witch") ||
-              itemText.includes("Witch")
-            ) {
-              targetArray = witch;
-            } else if (
-              itemText.includes("Golden Goblin") ||
-              itemText.includes("Goblin")
-            ) {
-              targetArray = goblin;
+              type = "ares";
+            } else if (itemText.includes("Witch")) {
+              type = "witch";
+            } else if (itemText.includes("Goblin")) {
+              type = "goblin";
             }
-            if (!targetArray) return;
+            if (!type) return;
 
             let xMatch = null;
             let yMatch = null;
             const allDivs = row.querySelectorAll("div[data-tooltip-id]");
             for (const div of allDivs) {
-              const tooltipId =
-                (div as any).getAttribute("data-tooltip-id") || "";
+              const tooltipId = (div as any).getAttribute("data-tooltip-id") || "";
               const divText = (div as any).textContent?.trim() || "";
               if (tooltipId.includes("_x") && !xMatch) {
                 const test = divText.match(/X:\s*(\d+)/);
@@ -797,24 +857,23 @@ class ScraperService {
             if (xMatch && yMatch) {
               const x = parseInt(xMatch[1]);
               const y = parseInt(yMatch[1]);
-              const levelMatch =
-                itemText.match(/Lv(\d+)/i) || itemText.match(/Level\s*(\d+)/i);
+              const levelMatch = itemText.match(/Lv(\d+)/i) || itemText.match(/Level\s*(\d+)/i);
               const level = levelMatch ? parseInt(levelMatch[1]) : 0;
-
-              targetArray.push({
-                x,
-                y,
-                level,
-                timestamp: new Date().toISOString(),
+              results.push({
+                key: `${type}_${x}_${y}`,
+                data: { x, y, level, type, timestamp: new Date().toISOString() },
               });
             }
-          } catch (e) {
-            // Skip invalid rows
-          }
+          } catch (e) {}
         });
-
-        return { ares, witch, goblin };
+        return results;
       });
+
+      const result = {
+        ares: allRows.filter((r: any) => r.type === "ares").map(({ type, ...rest }: any) => rest),
+        witch: allRows.filter((r: any) => r.type === "witch").map(({ type, ...rest }: any) => rest),
+        goblin: allRows.filter((r: any) => r.type === "goblin").map(({ type, ...rest }: any) => rest),
+      };
 
       console.log(
         `✅ Monsters scrape done — Ares: ${result.ares.length}, Witch: ${result.witch.length}, Goblin: ${result.goblin.length}`,
@@ -876,86 +935,41 @@ class ScraperService {
 
       // 5. 좌표 데이터 추출
       console.log("   Extracting coordinates from table...");
-      // @ts-ignore - Running in browser context
-      const coordinates = await this.page!.evaluate(() => {
-        const results: any[] = [];
-        const debugInfo: any[] = [];
-        const levelCounts: { [key: number]: number } = {};
-
-        // iScout 테이블 행 찾기
+      const allRows = await this.scrollAndExtractRows(() => {
+        const results: { key: string; data: any }[] = [];
         const rows = document.querySelectorAll("tr");
-
-        rows.forEach((row: any, index: number) => {
+        rows.forEach((row: any) => {
           try {
-            // 아이템 이름 찾기 (Pyramid가 포함된 텍스트)
-            const itemDiv = row.querySelector(
-              'div[data-tooltip-id*="clickboard_data"]',
-            );
+            const itemDiv = row.querySelector('div[data-tooltip-id*="clickboard_data"]');
             const itemText = itemDiv?.textContent?.trim() || "";
+            if (!itemText.includes("Pyramid")) return;
 
-            // 처음 50개 행의 정보 수집 (디버깅용)
-            if (index < 50 && itemText) {
-              debugInfo.push({ index, itemText: itemText.substring(0, 60) });
-            }
-
-            // Pyramid가 아니면 스킵
-            if (!itemText.includes("Pyramid")) {
-              return;
-            }
-
-            // 레벨 추출하여 카운트
-            const levelMatch = itemText.match(/Lv(\d+)/);
-            if (levelMatch) {
-              const level = parseInt(levelMatch[1]);
-              levelCounts[level] = (levelCounts[level] || 0) + 1;
-            }
-
-            // X 좌표 찾기 - data-tooltip-id에 _x가 포함된 요소
             const xDiv = row.querySelector('[data-tooltip-id$="_x"]');
             const xText = xDiv?.textContent?.trim() || "";
-
-            // Y 좌표 찾기 - data-tooltip-id에 _y가 포함된 요소 (첫 번째 것 선택)
             const yDivs = row.querySelectorAll('[data-tooltip-id$="_y"]');
-            // 첫 번째 _y 요소가 실제 Y 좌표 (두 번째는 XY 복사 버튼)
             const yText = yDivs[0]?.textContent?.trim() || "";
 
-            // "X: 868" -> 868, "Y: 970" -> 970 형태에서 숫자 추출
             const xMatch = xText.match(/X:\s*(\d+)/);
             const yMatch = yText.match(/Y:\s*(\d+)/);
+            if (!xMatch || !yMatch) return;
 
-            if (xMatch && yMatch) {
-              const x = parseInt(xMatch[1]);
-              const y = parseInt(yMatch[1]);
+            const x = parseInt(xMatch[1]);
+            const y = parseInt(yMatch[1]);
+            const levelMatch = itemText.match(/Lv(\d+)/);
+            const level = levelMatch ? parseInt(levelMatch[1]) : 0;
+            if (level !== 4 && level !== 5) return;
 
-              // 레벨 추출 - "Lv4 Pyramid Ruins" -> 4
-              const levelMatch = itemText.match(/Lv(\d+)/);
-              const level = levelMatch ? parseInt(levelMatch[1]) : 0;
-
-              // 레벨 4, 5만 수집 (다른 레벨은 무시)
-              if (level !== 4 && level !== 5) {
-                return;
-              }
-
-              results.push({
-                x: x,
-                y: y,
-                level: level,
-                timestamp: new Date().toISOString(),
-              });
-            }
-          } catch (e) {
-            // Skip invalid rows
-          }
+            results.push({
+              key: `pyr_${x}_${y}`,
+              data: { x, y, level, timestamp: new Date().toISOString() },
+            });
+          } catch (e) {}
         });
-
         return results;
       });
 
-      console.log(
-        `✅ Found ${coordinates.length} Pyramid coordinates (Lv4, Lv5 only)`,
-      );
-
-      return coordinates;
+      console.log(`✅ Found ${allRows.length} Pyramid coordinates (Lv4, Lv5 only)`);
+      return allRows;
     } catch (error) {
       console.error("❌ Pyramid scraping failed:", error);
 

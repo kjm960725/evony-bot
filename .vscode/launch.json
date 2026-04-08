@@ -5,72 +5,22 @@
       "name": "🔥 Discord Bot (Hot Reload)",
       "type": "node",
       "request": "launch",
-      "runtimeExecutable": "npx",
-      "runtimeArgs": [
-        "ts-node-dev",
-        "--respawn",
-        "--transpile-only",
-        "src/index.ts"
-      ],
+      "program": "node_modules/ts-node-dev/lib/bin.js",
+      "args": ["--respawn", "--transpile-only", "src/index.ts"],
       "cwd": "${workspaceFolder}",
-      "envFile": "${workspaceFolder}/.env",
-      "skipFiles": [
-        "<node_internals>/**",
-        "node_modules/**"
-      ],
       "console": "integratedTerminal",
-      "internalConsoleOptions": "neverOpen",
-      "outputCapture": "console"
+      "internalConsoleOptions": "neverOpen"
     },
     {
       "name": "🤖 Discord Bot Debug",
       "type": "node",
       "request": "launch",
       "runtimeExecutable": "node",
-      "runtimeArgs": [
-        "-r",
-        "ts-node/register"
-      ],
-      "args": [
-        "${workspaceFolder}/src/index.ts"
-      ],
+      "runtimeArgs": ["-r", "ts-node/register"],
+      "args": ["./src/index.ts"],
       "cwd": "${workspaceFolder}",
-      "envFile": "${workspaceFolder}/.env",
-      "skipFiles": [
-        "<node_internals>/**",
-        "node_modules/**"
-      ],
       "console": "integratedTerminal",
-      "internalConsoleOptions": "neverOpen",
-      "restart": true,
-      "preLaunchTask": "typescript-watch",
-      "sourceMaps": true,
-      "outFiles": [
-        "${workspaceFolder}/dist/**/*.js"
-      ],
-      "resolveSourceMapLocations": [
-        "${workspaceFolder}/**",
-        "!**/node_modules/**"
-      ]
-    },
-    {
-      "name": "🚀 Discord Bot (빌드된 파일)",
-      "type": "node",
-      "request": "launch",
-      "program": "${workspaceFolder}/dist/index.js",
-      "cwd": "${workspaceFolder}",
-      "envFile": "${workspaceFolder}/.env",
-      "skipFiles": [
-        "<node_internals>/**"
-      ],
-      "console": "integratedTerminal",
-      "internalConsoleOptions": "neverOpen",
-      "preLaunchTask": "typescript-build",
-      "sourceMaps": true,
-      "outFiles": [
-        "${workspaceFolder}/dist/**/*.js"
-      ]
+      "internalConsoleOptions": "neverOpen"
     }
   ]
 }
-
