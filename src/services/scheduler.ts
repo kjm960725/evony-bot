@@ -3,17 +3,17 @@ import { cache } from './cache';
 import { scraper } from './scraper';
 import { notification } from './notification';
 import { CoordinateType, getTypeEmoji } from '../utils/coordinateTypes';
+import { AlertType } from './db';
 
 class SchedulerService {
   private intervalId: NodeJS.Timeout | null = null;
   private readonly UPDATE_INTERVAL = 5 * 60 * 1000; // 5분 (밀리초)
   
-  // 크롤링 순서: 피라미드 → 바바리안 → 아레스 → 피라미드...
-  private readonly CRAWL_SEQUENCE: CoordinateType[] = ['pyramid', 'barbarian', 'ares'];
+  // 크롤링 순서: 피라미드 → 바바리안 → 몬스터(Ares+Witch+Goblin) → 피라미드...
+  private readonly CRAWL_SEQUENCE: CoordinateType[] = ['pyramid', 'barbarian', 'monsters'];
   private currentIndex: number = 0;
   private nextUpdateTime: Date = new Date();
 
-  // 스케줄러 시작
   start(): void {
     if (this.intervalId) {
       console.log('⚠️ Scheduler is already running');
@@ -21,19 +21,16 @@ class SchedulerService {
     }
 
     console.log('🕐 Starting auto-update scheduler (5 min rotating interval)');
-    console.log('📋 Crawl sequence: Pyramid → Barbarian → Ares → Pyramid...');
+    console.log('📋 Crawl sequence: Pyramid → Barbarian → Monsters(Ares+Witch+Goblin) → Pyramid...');
     
-    // 시작 시 모든 타입 크롤링
     console.log('🚀 Initial crawl - fetching all coordinates...');
     this.updateAll();
 
-    // 5분마다 순환 업데이트
     this.intervalId = setInterval(() => {
       this.updateNext();
     }, this.UPDATE_INTERVAL);
   }
 
-  // 스케줄러 중지
   stop(): void {
     if (this.intervalId) {
       clearInterval(this.intervalId);
@@ -42,15 +39,12 @@ class SchedulerService {
     }
   }
 
-  // 수동 업데이트 (refresh 명령어용) - 모든 타입 크롤링
   async forceUpdate(): Promise<void> {
     console.log('🔄 Force update requested - crawling all types');
     await this.updateAll();
   }
 
-  // 다음 타입 업데이트 (순환)
   private async updateNext(): Promise<void> {
-    // 이미 업데이트 중이면 스킵
     if (cache.getMetadata().isUpdating) {
       console.log('⏭️ Update already in progress, skipping...');
       return;
@@ -63,34 +57,29 @@ class SchedulerService {
       console.log(`\n📡 Starting scheduled crawl [${this.currentIndex + 1}/3]...`);
       console.log(`🎯 Target: ${getTypeEmoji(type)} ${type.toUpperCase()}`);
 
-      // 이전 좌표 저장 (알림 비교용)
-      const previousCoordinates = cache.get(type);
+      if (type === 'monsters') {
+        await this.updateMonsters();
+      } else {
+        const cacheType = type as 'barbarian' | 'pyramid';
+        const previousCoordinates = cache.get(cacheType);
+        const coordinates = await this.scrapeByType(type);
+        cache.set(cacheType, coordinates);
 
-      // 해당 타입만 크롤링
-      const coordinates = await this.scrapeByType(type);
-
-      // 캐시에 저장
-      cache.set(type, coordinates);
+        if (coordinates.length > 0) {
+          const alertsSent = await notification.sendAlerts(cacheType, coordinates, previousCoordinates);
+          if (alertsSent > 0) {
+            console.log(`   🔔 Sent ${alertsSent} alert(s)`);
+          }
+        }
+      }
       
-      // 다음 업데이트 시간 계산
       this.nextUpdateTime = new Date(Date.now() + this.UPDATE_INTERVAL);
       
       console.log(`✅ ${type.toUpperCase()} crawl completed`);
-      console.log(`   - Found ${coordinates.length} coordinates`);
       console.log(`   - Next crawl: ${this.getNextType()} in 5 minutes`);
       console.log(`   - Next update time: ${this.nextUpdateTime.toLocaleTimeString()}`);
 
-      // 🔔 알림 발송
-      if (coordinates.length > 0) {
-        const alertsSent = await notification.sendAlerts(type, coordinates, previousCoordinates);
-        if (alertsSent > 0) {
-          console.log(`   🔔 Sent ${alertsSent} alert(s)`);
-        }
-      }
-
       cache.setUpdating(false);
-
-      // 다음 인덱스로 이동
       this.currentIndex = (this.currentIndex + 1) % this.CRAWL_SEQUENCE.length;
 
     } catch (error) {
@@ -99,7 +88,33 @@ class SchedulerService {
     }
   }
 
-  // 모든 타입 크롤링 (강제 업데이트용)
+  // Monsters 크롤링 → ares/witch/goblin 3종 캐시 저장 + 알림 발송
+  private async updateMonsters(): Promise<void> {
+    const prevAres = cache.get('ares');
+    const prevWitch = cache.get('witch');
+    const prevGoblin = cache.get('goblin');
+
+    const { ares, witch, goblin } = await scraper.scrapeMonsters();
+
+    cache.set('ares', ares);
+    cache.set('witch', witch);
+    cache.set('goblin', goblin);
+
+    console.log(`   - Ares: ${ares.length}, Witch: ${witch.length}, Goblin: ${goblin.length}`);
+
+    const alertTypes: { type: AlertType; coords: typeof ares; prev: typeof ares }[] = [
+      { type: 'ares', coords: ares, prev: prevAres },
+      { type: 'witch', coords: witch, prev: prevWitch },
+      { type: 'goblin', coords: goblin, prev: prevGoblin },
+    ];
+    for (const { type, coords, prev } of alertTypes) {
+      if (coords.length > 0) {
+        const sent = await notification.sendAlerts(type, coords, prev);
+        if (sent > 0) console.log(`   🔔 Sent ${sent} ${type} alert(s)`);
+      }
+    }
+  }
+
   private async updateAll(): Promise<void> {
     if (cache.getMetadata().isUpdating) {
       console.log('⏭️ Update already in progress, skipping...');
@@ -110,18 +125,16 @@ class SchedulerService {
       cache.setUpdating(true);
       console.log('📡 Starting full crawl (all types)...');
 
-      // 모든 좌표 크롤링
       const data = await scraper.scrapeAll();
-
-      // 캐시에 저장
       cache.setAll(data);
 
-      // 다음 업데이트 시간 계산
       this.nextUpdateTime = new Date(Date.now() + this.UPDATE_INTERVAL);
 
       console.log(`✅ Full crawl completed`);
       console.log(`   - Barbarian: ${data.barbarian.length}`);
       console.log(`   - Ares: ${data.ares.length}`);
+      console.log(`   - Witch: ${data.witch.length}`);
+      console.log(`   - Goblin: ${data.goblin.length}`);
       console.log(`   - Pyramid: ${data.pyramid.length}`);
       console.log(`   - Next scheduled crawl: ${this.getNextType()} at ${this.nextUpdateTime.toLocaleTimeString()}`);
 
@@ -131,32 +144,32 @@ class SchedulerService {
     }
   }
 
-  // 타입별 크롤링
   private async scrapeByType(type: CoordinateType) {
     switch (type) {
       case 'barbarian':
         return await scraper.scrapeBarbarian();
-      case 'ares':
-        return await scraper.scrapeAres();
       case 'pyramid':
         return await scraper.scrapePyramid();
+      case 'monsters': {
+        const result = await scraper.scrapeMonsters();
+        return [...result.ares, ...result.witch, ...result.goblin];
+      }
+      default:
+        return [];
     }
   }
 
-  // 다음 크롤링 타입 가져오기
   private getNextType(): string {
     const nextIndex = (this.currentIndex) % this.CRAWL_SEQUENCE.length;
     return this.CRAWL_SEQUENCE[nextIndex].toUpperCase();
   }
 
-  // 다음 업데이트까지 남은 시간 (초)
   getTimeUntilNextUpdate(): number {
     const now = Date.now();
     const next = this.nextUpdateTime.getTime();
     return Math.max(0, Math.floor((next - now) / 1000));
   }
 
-  // 현재 크롤링 순서 정보
   getCurrentStatus(): { 
     current: string; 
     next: string; 
@@ -173,6 +186,4 @@ class SchedulerService {
   }
 }
 
-// 싱글톤 인스턴스
 export const scheduler = new SchedulerService();
-

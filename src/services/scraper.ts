@@ -357,32 +357,6 @@ class ScraperService {
       console.log("✅ Already logged in");
     }
 
-    // 3. List 버튼 클릭
-    console.log("   Clicking List button...");
-    await this.page.waitForTimeout(1000);
-
-    // @ts-ignore - Running in browser context
-    const listButtonClicked = await this.page.evaluate(() => {
-      const buttons = Array.from(document.querySelectorAll("button"));
-      const listButton = buttons.find(
-        (btn: any) =>
-          btn.textContent?.trim().includes("List") &&
-          btn.querySelector("p")?.textContent?.trim() === "List",
-      );
-      if (listButton) {
-        (listButton as any).click();
-        return true;
-      }
-      return false;
-    });
-
-    if (listButtonClicked) {
-      console.log("✅ List button clicked");
-      await this.page.waitForTimeout(2000); // 화면 전환 대기
-    } else {
-      console.log("⚠️  List button not found (may already be in list mode)");
-    }
-
     console.log("✅ Ready to scrape");
   }
 
@@ -400,6 +374,171 @@ class ScraperService {
     }
   }
 
+  // Puppeteer 네이티브 클릭으로 버튼 찾아 클릭 (합성 이벤트 대신 실제 마우스 이벤트 발생)
+  private async clickButtonNative(
+    matchFn: (text: string) => boolean,
+  ): Promise<boolean> {
+    const buttons = await this.page!.$$("button");
+    for (const button of buttons) {
+      const text = await button.evaluate(
+        (el) => el.textContent?.trim() || "",
+      );
+      if (matchFn(text)) {
+        await button.evaluate((el) =>
+          el.scrollIntoView({ block: "center", inline: "nearest" }),
+        );
+        await this.page!.waitForTimeout(500);
+        await button.click();
+        return true;
+      }
+    }
+    return false;
+  }
+
+  // 일반 요소를 텍스트로 찾아 네이티브 클릭
+  private async clickElementByText(
+    selector: string,
+    textMatch: string,
+  ): Promise<boolean> {
+    const elements = await this.page!.$$(selector);
+    for (const el of elements) {
+      const text = await el.evaluate(
+        (node) => node.textContent?.trim() || "",
+      );
+      if (text.includes(textMatch)) {
+        await el.evaluate((node) =>
+          (node as HTMLElement).scrollIntoView({ block: "center", inline: "nearest" }),
+        );
+        await this.page!.waitForTimeout(500);
+        await el.click();
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Presets list → EvonyBot 선택.
+   *
+   * 근본 원인: menuitem은 [텍스트 div] + [X 삭제 버튼] 구조.
+   * menuitem 중앙을 클릭하면 X 버튼 영역에 해당하여 프리셋이 로드되지 않음.
+   * menuitem 내부의 텍스트 div를 직접 찾아 클릭해야 프리셋이 적용됨.
+   */
+  private async selectEvonyBotPreset(): Promise<boolean> {
+    console.log('   Clicking "Presets list" button...');
+    const presetsListClicked = await this.clickButtonNative((text) =>
+      text.includes("Presets list"),
+    );
+
+    if (presetsListClicked) {
+      console.log('   ✅ "Presets list" button clicked');
+      await this.page!.waitForTimeout(2000);
+    } else {
+      console.log('   ⚠️ "Presets list" button not found');
+      await this.page!.screenshot({
+        path: "debug-presets-button.png",
+        fullPage: true,
+      });
+      return false;
+    }
+
+    console.log('   Selecting "EvonyBot" preset from dropdown...');
+    try {
+      await this.page!.waitForSelector('[role="menuitem"]', { timeout: 8000 });
+    } catch {
+      console.log("   ⚠️ Dropdown menu did not appear");
+      await this.page!.screenshot({
+        path: "debug-preset-dropdown.png",
+        fullPage: true,
+      });
+      return false;
+    }
+
+    // menuitem을 뷰포트로 스크롤 후 딜레이
+    const menuitem = await this.page!.$('[role="menuitem"]');
+    if (menuitem) {
+      await menuitem.evaluate((el) =>
+        el.scrollIntoView({ block: "center", inline: "nearest" }),
+      );
+      await this.page!.waitForTimeout(500);
+    }
+
+    // menuitem 내부의 "텍스트 전용 div/span"을 찾아 클릭 (X 삭제 버튼 회피)
+    const clicked = await this.page!.evaluate(() => {
+      const items = Array.from(document.querySelectorAll('[role="menuitem"]'));
+      for (const item of items) {
+        const full = (item.textContent || "").trim();
+        if (!/EvonyBot|Evony Bot|evonybot/i.test(full)) continue;
+
+        const children = Array.from(item.querySelectorAll("div, span, p"));
+        for (const child of children) {
+          const t = (child.textContent || "").trim();
+          if (t === "EvonyBot" || t === "Evony Bot" || t === "evonybot") {
+            const r = (child as HTMLElement).getBoundingClientRect();
+            return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+          }
+        }
+      }
+      return null;
+    });
+
+    if (clicked) {
+      await this.page!.mouse.click(clicked.x, clicked.y);
+      console.log('   ✅ "EvonyBot" preset text clicked');
+      await this.page!.waitForTimeout(2500);
+      return true;
+    }
+
+    console.log('   ⚠️ "EvonyBot" preset text element not found');
+    await this.page!.screenshot({
+      path: "debug-preset-dropdown.png",
+      fullPage: true,
+    });
+    return false;
+  }
+
+  // Apply 버튼 클릭 및 결과 대기
+  private async clickApplyAndWait(): Promise<boolean> {
+    console.log('   Clicking "Apply" button...');
+    const applyClicked = await this.clickButtonNative((text) =>
+      text.toLowerCase().includes("apply"),
+    );
+
+    if (applyClicked) {
+      console.log('   ✅ "Apply" button clicked');
+      console.log("   Waiting 15 seconds for results to load...");
+      await this.page!.waitForTimeout(15000);
+
+      console.log("   Scrolling page to load all data...");
+      await this.page!.evaluate(async () => {
+        await new Promise<void>((resolve) => {
+          let totalHeight = 0;
+          const distance = 500;
+          const timer = setInterval(() => {
+            const scrollHeight = document.body.scrollHeight;
+            window.scrollBy(0, distance);
+            totalHeight += distance;
+            if (totalHeight >= scrollHeight) {
+              clearInterval(timer);
+              resolve();
+            }
+          }, 200);
+        });
+      });
+
+      console.log("   Waiting 3 seconds after scroll...");
+      await this.page!.waitForTimeout(3000);
+      return true;
+    } else {
+      console.log('   ⚠️ "Apply" button not found');
+      await this.page!.screenshot({
+        path: "debug-apply-button.png",
+        fullPage: true,
+      });
+      return false;
+    }
+  }
+
   // 바바리안 좌표 크롤링
   async scrapeBarbarian(): Promise<Coordinate[]> {
     console.log("🗡️ Scraping Barbarian coordinates...");
@@ -408,186 +547,35 @@ class ScraperService {
     await this.prepareForScraping(); // 매번 새로고침 + 로그인 확인 + List 버튼 클릭
 
     try {
-      // 1. "Presets list" 버튼 클릭
-      console.log('   Clicking "Presets list" button...');
-      // @ts-ignore - Running in browser context
-      const presetsListClicked = await this.page!.evaluate(() => {
-        const buttons = Array.from(document.querySelectorAll("button"));
-        const presetsButton = buttons.find((btn: any) =>
-          btn.textContent?.includes("Presets list"),
-        );
+      // 1-2. EvonyBot 프리셋 선택 (네이티브 클릭)
+      await this.selectEvonyBotPreset();
 
-        if (presetsButton) {
-          (presetsButton as any).click();
-          return true;
-        }
-        return false;
-      });
-
-      if (presetsListClicked) {
-        console.log('   ✅ "Presets list" button clicked');
-        await this.page!.waitForTimeout(2000); // 드롭다운이 열릴 시간 충분히 대기
-      } else {
-        console.log('   ⚠️ "Presets list" button not found');
-        await this.page!.screenshot({
-          path: "debug-presets-button.png",
-          fullPage: true,
-        });
-      }
-
-      // 2. 드롭다운 메뉴에서 "EvonyBot" 프리셋 선택
-      console.log('   Selecting "EvonyBot" preset from dropdown...');
-      // @ts-ignore - Running in browser context
-      const presetResult = await this.page!.evaluate(() => {
-        // 더 넓은 범위로 검색
-        const allClickable = Array.from(
-          document.querySelectorAll("li, a, button, div, span"),
-        );
-
-        // 디버깅: "Bot" 또는 "Preset"이 포함된 모든 요소 찾기
-        const relevantItems = allClickable
-          .filter((el: any) => {
-            const text = el.textContent?.trim() || "";
-            return (
-              text.includes("Bot") ||
-              text.includes("Preset") ||
-              text.includes("Evony")
-            );
-          })
-          .map((el: any) => el.textContent?.trim())
-          .filter(
-            (text: any, index: any, self: any) =>
-              text && self.indexOf(text) === index,
-          );
-
-        // EvonyBot 찾기 (여러 형태로 시도)
-        const evonyBotItem = allClickable.find((el: any) => {
-          const text = el.textContent?.trim() || "";
-          return (
-            text === "EvonyBot" || text === "Evony Bot" || text === "evonybot"
-          );
-        });
-
-        if (evonyBotItem) {
-          (evonyBotItem as any).click();
-          return { success: true, relevantItems };
-        }
-
-        return { success: false, relevantItems };
-      });
-
-      if (presetResult.success) {
-        console.log('   ✅ "EvonyBot" preset selected');
-        await this.page!.waitForTimeout(1000);
-      } else {
-        console.log('   ⚠️ "EvonyBot" preset not found in dropdown');
-        console.log("   Relevant items found:", presetResult.relevantItems);
-        await this.page!.screenshot({
-          path: "debug-preset-dropdown-barbarian.png",
-          fullPage: true,
-        });
-      }
-
-      // 3. "Arctic Barbarians" 버튼 클릭
+      // 3. "Arctic Barbarians" 버튼 클릭 (네이티브 클릭)
       console.log('   Clicking "Arctic Barbarians" button...');
-      // @ts-ignore - Running in browser context
-      const arcticBarbarianClicked = await this.page!.evaluate(() => {
-        // 버튼들 중에서 "Arctic Barbarians" 텍스트가 포함된 것 찾기
-        const buttons = Array.from(
-          document.querySelectorAll(
-            'button, div[role="button"], span[role="button"]',
-          ),
-        );
-        const targetButton = buttons.find((btn: any) =>
-          btn.textContent?.includes("Arctic Barbarians"),
-        );
-
-        if (targetButton) {
-          (targetButton as any).click();
-          return true;
-        }
-
-        // 버튼이 아닌 div나 다른 요소일 수 있음
-        const divs = Array.from(document.querySelectorAll("div, span, label"));
-        const targetDiv = divs.find(
-          (el: any) =>
-            el.textContent?.includes("Arctic Barbarians") &&
-            el.onclick !== null,
-        );
-
-        if (targetDiv) {
-          (targetDiv as any).click();
-          return true;
-        }
-
-        return false;
-      });
+      const arcticBarbarianClicked =
+        (await this.clickButtonNative((text) =>
+          text.includes("Arctic Barbarians"),
+        )) ||
+        (await this.clickElementByText(
+          "div, span, label",
+          "Arctic Barbarians",
+        ));
 
       if (arcticBarbarianClicked) {
         console.log('   ✅ "Arctic Barbarians" button clicked');
         await this.page!.waitForTimeout(1000);
       } else {
-        console.log(
-          '   ⚠️ "Arctic Barbarians" button not found, trying alternative selector...',
-        );
-        // 스크린샷 저장하여 디버깅
+        console.log('   ⚠️ "Arctic Barbarians" button not found');
         await this.page!.screenshot({
           path: "debug-barbarian-buttons.png",
           fullPage: true,
         });
       }
 
-      // 4. "Apply" 버튼 클릭
-      console.log('   Clicking "Apply" button...');
-      // @ts-ignore - Running in browser context
-      const applyClicked = await this.page!.evaluate(() => {
-        const buttons = Array.from(document.querySelectorAll("button"));
-        const applyButton = buttons.find((btn: any) =>
-          btn.textContent?.toLowerCase().includes("apply"),
-        );
+      // 4. Apply 클릭 및 결과 대기
+      await this.clickApplyAndWait();
 
-        if (applyButton) {
-          (applyButton as any).click();
-          return true;
-        }
-        return false;
-      });
-
-      if (applyClicked) {
-        console.log('   ✅ "Apply" button clicked');
-        console.log("   Waiting 15 seconds for results to load...");
-        await this.page!.waitForTimeout(15000);
-
-        // 페이지를 아래로 스크롤하여 모든 데이터 로드 (가상 스크롤 대응)
-        console.log("   Scrolling page to load all data...");
-        await this.page!.evaluate(async () => {
-          await new Promise<void>((resolve) => {
-            let totalHeight = 0;
-            const distance = 500;
-            const timer = setInterval(() => {
-              const scrollHeight = document.body.scrollHeight;
-              window.scrollBy(0, distance);
-              totalHeight += distance;
-
-              if (totalHeight >= scrollHeight) {
-                clearInterval(timer);
-                resolve();
-              }
-            }, 200);
-          });
-        });
-
-        console.log("   Waiting 3 seconds after scroll...");
-        await this.page!.waitForTimeout(3000);
-      } else {
-        console.log('   ⚠️ "Apply" button not found');
-        await this.page!.screenshot({
-          path: "debug-apply-button.png",
-          fullPage: true,
-        });
-      }
-
-      // 6. 좌표 데이터 추출
+      // 5. 좌표 데이터 추출
       console.log("   Extracting coordinates from table...");
       // @ts-ignore - Running in browser context
       const coordinates = await this.page!.evaluate(() => {
@@ -739,244 +727,84 @@ class ScraperService {
     }
   }
 
-  // Ares 좌표 크롤링
-  async scrapeAres(): Promise<Coordinate[]> {
-    console.log("⚡ Scraping Ares coordinates...");
+  // Monsters 크롤링 (Ares + Witch + Goblin 통합)
+  // 프리셋에 Golden Goblin, Mysterious Witch, Ares Statue가 함께 설정됨
+  async scrapeMonsters(): Promise<{
+    ares: Coordinate[];
+    witch: Coordinate[];
+    goblin: Coordinate[];
+  }> {
+    console.log("👾 Scraping Monsters (Ares + Witch + Goblin)...");
 
     await this.initialize();
-    await this.prepareForScraping(); // 매번 새로고침 + 로그인 확인 + List 버튼 클릭
+    await this.prepareForScraping();
 
     try {
-      // 1. "Presets list" 버튼 클릭
-      console.log('   Clicking "Presets list" button...');
+      await this.selectEvonyBotPreset();
+      await this.clickApplyAndWait();
+
+      console.log("   Extracting monster coordinates from table...");
       // @ts-ignore - Running in browser context
-      const presetsListClicked = await this.page!.evaluate(() => {
-        const buttons = Array.from(document.querySelectorAll("button"));
-        const presetsButton = buttons.find((btn: any) =>
-          btn.textContent?.includes("Presets list"),
-        );
-
-        if (presetsButton) {
-          (presetsButton as any).click();
-          return true;
-        }
-        return false;
-      });
-
-      if (presetsListClicked) {
-        console.log('   ✅ "Presets list" button clicked');
-        await this.page!.waitForTimeout(2000); // 드롭다운이 열릴 시간 충분히 대기
-      } else {
-        console.log('   ⚠️ "Presets list" button not found');
-        await this.page!.screenshot({
-          path: "debug-presets-button.png",
-          fullPage: true,
-        });
-      }
-
-      // 2. 드롭다운 메뉴에서 "EvonyBot" 프리셋 선택
-      console.log('   Selecting "EvonyBot" preset from dropdown...');
-      // @ts-ignore - Running in browser context
-      const presetResult = await this.page!.evaluate(() => {
-        // 더 넓은 범위로 검색
-        const allClickable = Array.from(
-          document.querySelectorAll("li, a, button, div, span"),
-        );
-
-        // 디버깅: "Bot" 또는 "Preset"이 포함된 모든 요소 찾기
-        const relevantItems = allClickable
-          .filter((el: any) => {
-            const text = el.textContent?.trim() || "";
-            return (
-              text.includes("Bot") ||
-              text.includes("Preset") ||
-              text.includes("Evony")
-            );
-          })
-          .map((el: any) => el.textContent?.trim())
-          .filter(
-            (text: any, index: any, self: any) =>
-              text && self.indexOf(text) === index,
-          );
-
-        // EvonyBot 찾기 (여러 형태로 시도)
-        const evonyBotItem = allClickable.find((el: any) => {
-          const text = el.textContent?.trim() || "";
-          return (
-            text === "EvonyBot" || text === "Evony Bot" || text === "evonybot"
-          );
-        });
-
-        if (evonyBotItem) {
-          (evonyBotItem as any).click();
-          return { success: true, relevantItems };
-        }
-
-        return { success: false, relevantItems };
-      });
-
-      if (presetResult.success) {
-        console.log('   ✅ "EvonyBot" preset selected');
-        await this.page!.waitForTimeout(1000);
-      } else {
-        console.log('   ⚠️ "EvonyBot" preset not found in dropdown');
-        console.log("   Relevant items found:", presetResult.relevantItems);
-        await this.page!.screenshot({
-          path: "debug-preset-dropdown-ares.png",
-          fullPage: true,
-        });
-      }
-
-      // 3. "Ares" 버튼 클릭 (해당하는 카테고리 버튼 찾기)
-      console.log("   Clicking Ares category button...");
-      // @ts-ignore - Running in browser context
-      const aresClicked = await this.page!.evaluate(() => {
-        const buttons = Array.from(
-          document.querySelectorAll(
-            'button, div[role="button"], span[role="button"]',
-          ),
-        );
-        const targetButton = buttons.find(
-          (btn: any) =>
-            btn.textContent?.includes("Ares") ||
-            btn.textContent?.includes("ares"),
-        );
-
-        if (targetButton) {
-          (targetButton as any).click();
-          return true;
-        }
-
-        const divs = Array.from(document.querySelectorAll("div, span, label"));
-        const targetDiv = divs.find(
-          (el: any) => el.textContent?.includes("Ares") && el.onclick !== null,
-        );
-
-        if (targetDiv) {
-          (targetDiv as any).click();
-          return true;
-        }
-
-        return false;
-      });
-
-      if (aresClicked) {
-        console.log("   ✅ Ares button clicked");
-        await this.page!.waitForTimeout(1000);
-      } else {
-        console.log("   ⚠️ Ares button not found");
-        await this.page!.screenshot({
-          path: "debug-ares-buttons.png",
-          fullPage: true,
-        });
-      }
-
-      // 4. "Apply" 버튼 클릭
-      console.log('   Clicking "Apply" button...');
-      // @ts-ignore - Running in browser context
-      const applyClicked = await this.page!.evaluate(() => {
-        const buttons = Array.from(document.querySelectorAll("button"));
-        const applyButton = buttons.find((btn: any) =>
-          btn.textContent?.toLowerCase().includes("apply"),
-        );
-
-        if (applyButton) {
-          (applyButton as any).click();
-          return true;
-        }
-        return false;
-      });
-
-      if (applyClicked) {
-        console.log('   ✅ "Apply" button clicked');
-        console.log("   Waiting 15 seconds for results to load...");
-        await this.page!.waitForTimeout(15000);
-
-        // 페이지를 아래로 스크롤하여 모든 데이터 로드
-        console.log("   Scrolling page to load all data...");
-        await this.page!.evaluate(async () => {
-          await new Promise<void>((resolve) => {
-            let totalHeight = 0;
-            const distance = 500;
-            const timer = setInterval(() => {
-              const scrollHeight = document.body.scrollHeight;
-              window.scrollBy(0, distance);
-              totalHeight += distance;
-
-              if (totalHeight >= scrollHeight) {
-                clearInterval(timer);
-                resolve();
-              }
-            }, 200);
-          });
-        });
-
-        console.log("   Waiting 3 seconds after scroll...");
-        await this.page!.waitForTimeout(3000);
-      } else {
-        console.log('   ⚠️ "Apply" button not found');
-        await this.page!.screenshot({
-          path: "debug-apply-button.png",
-          fullPage: true,
-        });
-      }
-
-      // 5. 좌표 데이터 추출
-      console.log("   Extracting coordinates from table...");
-      // @ts-ignore - Running in browser context
-      const coordinates = await this.page!.evaluate(() => {
-        const results: any[] = [];
+      const result = await this.page!.evaluate(() => {
+        const ares: any[] = [];
+        const witch: any[] = [];
+        const goblin: any[] = [];
         const rows = document.querySelectorAll("tr");
 
         rows.forEach((row: any) => {
           try {
-            // 아이템 이름 찾기 (Ares가 포함된 텍스트)
             const itemDiv = row.querySelector(
               'div[data-tooltip-id*="clickboard_data"]',
             );
             const itemText = itemDiv?.textContent?.trim() || "";
+            if (!itemText) return;
 
-            // Ares가 아니면 스킵
-            if (!itemText.includes("Ares") && !itemText.includes("ares")) {
-              return;
+            // 타입 분류
+            let targetArray: any[] | null = null;
+            if (itemText.includes("Ares") || itemText.includes("ares")) {
+              targetArray = ares;
+            } else if (
+              itemText.includes("Mysterious Witch") ||
+              itemText.includes("Witch")
+            ) {
+              targetArray = witch;
+            } else if (
+              itemText.includes("Golden Goblin") ||
+              itemText.includes("Goblin")
+            ) {
+              targetArray = goblin;
             }
+            if (!targetArray) return;
 
-            // 좌표 찾기 - data-tooltip-id 속성으로
             let xMatch = null;
             let yMatch = null;
-
             const allDivs = row.querySelectorAll("div[data-tooltip-id]");
             for (const div of allDivs) {
               const tooltipId =
                 (div as any).getAttribute("data-tooltip-id") || "";
               const divText = (div as any).textContent?.trim() || "";
-
               if (tooltipId.includes("_x") && !xMatch) {
                 const test = divText.match(/X:\s*(\d+)/);
                 if (test) xMatch = test;
               }
-
               if (tooltipId.includes("_y") && !yMatch) {
                 const test = divText.match(/Y:\s*(\d+)/);
                 if (test) yMatch = test;
               }
-
               if (xMatch && yMatch) break;
             }
 
             if (xMatch && yMatch) {
               const x = parseInt(xMatch[1]);
               const y = parseInt(yMatch[1]);
-
-              // 레벨 추출
               const levelMatch =
                 itemText.match(/Lv(\d+)/i) || itemText.match(/Level\s*(\d+)/i);
               const level = levelMatch ? parseInt(levelMatch[1]) : 0;
 
-              results.push({
-                x: x,
-                y: y,
-                level: level,
+              targetArray.push({
+                x,
+                y,
+                level,
                 timestamp: new Date().toISOString(),
               });
             }
@@ -985,21 +813,25 @@ class ScraperService {
           }
         });
 
-        return results;
+        return { ares, witch, goblin };
       });
 
-      console.log(`✅ Found ${coordinates.length} Ares coordinates`);
-      return coordinates;
+      console.log(
+        `✅ Monsters scrape done — Ares: ${result.ares.length}, Witch: ${result.witch.length}, Goblin: ${result.goblin.length}`,
+      );
+      return result;
     } catch (error) {
-      console.error("❌ Ares scraping failed:", error);
+      console.error("❌ Monsters scraping failed:", error);
 
       if (this.page) {
-        await this.page.screenshot({ path: "ares-error.png", fullPage: true });
-        console.log("   💾 Error screenshot saved: ares-error.png");
+        await this.page.screenshot({
+          path: "monsters-error.png",
+          fullPage: true,
+        });
+        console.log("   💾 Error screenshot saved: monsters-error.png");
       }
 
-      console.log("⚠️ Returning empty array (no mock data)");
-      return [];
+      return { ares: [], witch: [], goblin: [] };
     }
   }
 
@@ -1011,184 +843,38 @@ class ScraperService {
     await this.prepareForScraping(); // 매번 새로고침 + 로그인 확인 + List 버튼 클릭
 
     try {
-      // 1. "Presets list" 버튼 클릭
-      console.log('   Clicking "Presets list" button...');
-      // @ts-ignore - Running in browser context
-      const presetsListClicked = await this.page!.evaluate(() => {
-        const buttons = Array.from(document.querySelectorAll("button"));
-        const presetsButton = buttons.find((btn: any) =>
-          btn.textContent?.includes("Presets list"),
-        );
+      // 1-2. EvonyBot 프리셋 선택 (네이티브 클릭)
+      await this.selectEvonyBotPreset();
 
-        if (presetsButton) {
-          (presetsButton as any).click();
-          return true;
-        }
-        return false;
-      });
-
-      if (presetsListClicked) {
-        console.log('   ✅ "Presets list" button clicked');
-        await this.page!.waitForTimeout(2000); // 드롭다운이 열릴 시간 충분히 대기
-      } else {
-        console.log('   ⚠️ "Presets list" button not found');
-        await this.page!.screenshot({
-          path: "debug-presets-button.png",
-          fullPage: true,
-        });
-      }
-
-      // 2. 드롭다운 메뉴에서 "EvonyBot" 프리셋 선택
-      console.log('   Selecting "EvonyBot" preset from dropdown...');
-      // @ts-ignore - Running in browser context
-      const presetResult = await this.page!.evaluate(() => {
-        // 더 넓은 범위로 검색
-        const allClickable = Array.from(
-          document.querySelectorAll("li, a, button, div, span"),
-        );
-
-        // 디버깅: "Bot" 또는 "Preset"이 포함된 모든 요소 찾기
-        const relevantItems = allClickable
-          .filter((el: any) => {
-            const text = el.textContent?.trim() || "";
-            return (
-              text.includes("Bot") ||
-              text.includes("Preset") ||
-              text.includes("Evony")
-            );
-          })
-          .map((el: any) => el.textContent?.trim())
-          .filter(
-            (text: any, index: any, self: any) =>
-              text && self.indexOf(text) === index,
-          );
-
-        // EvonyBot 찾기 (여러 형태로 시도)
-        const evonyBotItem = allClickable.find((el: any) => {
-          const text = el.textContent?.trim() || "";
-          return (
-            text === "EvonyBot" || text === "Evony Bot" || text === "evonybot"
-          );
-        });
-
-        if (evonyBotItem) {
-          (evonyBotItem as any).click();
-          return { success: true, relevantItems };
-        }
-
-        return { success: false, relevantItems };
-      });
-
-      if (presetResult.success) {
-        console.log('   ✅ "EvonyBot" preset selected');
-        await this.page!.waitForTimeout(1000);
-      } else {
-        console.log('   ⚠️ "EvonyBot" preset not found in dropdown');
-        console.log("   Relevant items found:", presetResult.relevantItems);
-        await this.page!.screenshot({
-          path: "debug-preset-dropdown-pyramid.png",
-          fullPage: true,
-        });
-      }
-
-      // 3. Relics/Pyramids 버튼 클릭
+      // 3. "Relics/Pyramids" 버튼 클릭 (네이티브 클릭)
       console.log('   Clicking "Relics/Pyramids" button...');
-      // @ts-ignore - Running in browser context
-      const relicsPyramidsClicked = await this.page!.evaluate(() => {
-        // 버튼들 중에서 "Relics/Pyramids" 텍스트가 포함된 것 찾기
-        const buttons = Array.from(document.querySelectorAll("button"));
-        const targetButton = buttons.find(
-          (btn: any) =>
-            btn.textContent?.includes("Relics/Pyramids") ||
-            btn.textContent?.includes("Relics") ||
-            btn.textContent?.includes("Pyramids"),
-        );
-
-        if (targetButton) {
-          (targetButton as any).click();
-          return true;
-        }
-
-        // 버튼이 아닌 div나 다른 요소일 수 있음
-        const divs = Array.from(document.querySelectorAll("div, span, label"));
-        const targetDiv = divs.find(
-          (el: any) =>
-            el.textContent?.includes("Relics/Pyramids") && el.onclick !== null,
-        );
-
-        if (targetDiv) {
-          (targetDiv as any).click();
-          return true;
-        }
-
-        return false;
-      });
+      const relicsPyramidsClicked =
+        (await this.clickButtonNative(
+          (text) =>
+            text.includes("Relics/Pyramids") ||
+            text.includes("Relics") ||
+            text.includes("Pyramids"),
+        )) ||
+        (await this.clickElementByText(
+          "div, span, label",
+          "Relics/Pyramids",
+        ));
 
       if (relicsPyramidsClicked) {
         console.log('   ✅ "Relics/Pyramids" button clicked');
         await this.page!.waitForTimeout(1000);
       } else {
-        console.log(
-          '   ⚠️ "Relics/Pyramids" button not found, trying alternative selector...',
-        );
-        // 스크린샷 저장하여 디버깅
+        console.log('   ⚠️ "Relics/Pyramids" button not found');
         await this.page!.screenshot({
           path: "debug-pyramid-buttons.png",
           fullPage: true,
         });
       }
 
-      // 4. Apply 버튼 클릭
-      console.log('   Clicking "Apply" button...');
-      // @ts-ignore - Running in browser context
-      const applyClicked = await this.page!.evaluate(() => {
-        const buttons = Array.from(document.querySelectorAll("button"));
-        const applyButton = buttons.find((btn: any) =>
-          btn.textContent?.toLowerCase().includes("apply"),
-        );
+      // 4. Apply 클릭 및 결과 대기
+      await this.clickApplyAndWait();
 
-        if (applyButton) {
-          (applyButton as any).click();
-          return true;
-        }
-        return false;
-      });
-
-      if (applyClicked) {
-        console.log('   ✅ "Apply" button clicked');
-        console.log("   Waiting 15 seconds for results to load...");
-        await this.page!.waitForTimeout(15000);
-
-        // 페이지를 아래로 스크롤하여 모든 데이터 로드 (가상 스크롤 대응)
-        console.log("   Scrolling page to load all data...");
-        await this.page!.evaluate(async () => {
-          await new Promise<void>((resolve) => {
-            let totalHeight = 0;
-            const distance = 500;
-            const timer = setInterval(() => {
-              const scrollHeight = document.body.scrollHeight;
-              window.scrollBy(0, distance);
-              totalHeight += distance;
-
-              if (totalHeight >= scrollHeight) {
-                clearInterval(timer);
-                resolve();
-              }
-            }, 200);
-          });
-        });
-
-        console.log("   Waiting 3 seconds after scroll...");
-        await this.page!.waitForTimeout(3000);
-      } else {
-        console.log('   ⚠️ "Apply" button not found');
-        await this.page!.screenshot({
-          path: "debug-apply-button.png",
-          fullPage: true,
-        });
-      }
-
-      // 4. 좌표 데이터 추출
+      // 5. 좌표 데이터 추출
       console.log("   Extracting coordinates from table...");
       // @ts-ignore - Running in browser context
       const coordinates = await this.page!.evaluate(() => {
@@ -1291,6 +977,8 @@ class ScraperService {
   async scrapeAll(): Promise<{
     barbarian: Coordinate[];
     ares: Coordinate[];
+    witch: Coordinate[];
+    goblin: Coordinate[];
     pyramid: Coordinate[];
   }> {
     await this.initialize();
@@ -1299,23 +987,24 @@ class ScraperService {
       console.log("📊 Starting full scrape...");
       const startTime = Date.now();
 
-      // 순차적으로 크롤링 (동시 실행 시 페이지 navigation 충돌 방지)
       console.log("1️⃣ Scraping Pyramid...");
       const pyramid = await this.scrapePyramid();
 
       console.log("2️⃣ Scraping Barbarian...");
       const barbarian = await this.scrapeBarbarian();
 
-      console.log("3️⃣ Scraping Ares...");
-      const ares = await this.scrapeAres();
+      console.log("3️⃣ Scraping Monsters (Ares + Witch + Goblin)...");
+      const { ares, witch, goblin } = await this.scrapeMonsters();
 
       const duration = ((Date.now() - startTime) / 1000).toFixed(2);
       console.log(`✅ Full scrape completed in ${duration}s`);
       console.log(`   - Barbarian: ${barbarian.length}`);
       console.log(`   - Ares: ${ares.length}`);
+      console.log(`   - Witch: ${witch.length}`);
+      console.log(`   - Goblin: ${goblin.length}`);
       console.log(`   - Pyramid: ${pyramid.length}`);
 
-      return { barbarian, ares, pyramid };
+      return { barbarian, ares, witch, goblin, pyramid };
     } catch (error) {
       console.error("❌ Scraping failed:", error);
       throw error;

@@ -4,7 +4,7 @@ import { PrismaClient } from '@prisma/client';
 // PrismaClient 초기화
 const prisma = new PrismaClient();
 
-export type AlertType = 'pyramid' | 'barbarian' | 'ares';
+export type AlertType = 'pyramid' | 'barbarian' | 'ares' | 'witch' | 'goblin';
 
 export class DatabaseService {
   // ===============================

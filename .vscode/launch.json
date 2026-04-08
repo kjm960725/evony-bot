@@ -5,11 +5,12 @@
       "name": "🔥 Discord Bot (Hot Reload)",
       "type": "node",
       "request": "launch",
-      "runtimeExecutable": "${workspaceFolder}/node_modules/.bin/ts-node-dev",
+      "runtimeExecutable": "npx",
       "runtimeArgs": [
+        "ts-node-dev",
         "--respawn",
         "--transpile-only",
-        "${workspaceFolder}/src/index.ts"
+        "src/index.ts"
       ],
       "cwd": "${workspaceFolder}",
       "envFile": "${workspaceFolder}/.env",

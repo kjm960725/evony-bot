@@ -27,7 +27,7 @@ export interface Command {
 
 // 캐시에서 좌표 가져오기
 async function fetchCoordinates(
-  type: "barbarian" | "ares" | "pyramid",
+  type: "barbarian" | "ares" | "witch" | "goblin" | "pyramid",
 ): Promise<Coordinate[]> {
   return cache.get(type);
 }
@@ -56,7 +56,7 @@ const helpCommand: Command = {
         {
           name: "🗺️ Coordinate Commands",
           value:
-            "`!barbarian` (or `!bb`) - Barbarian coordinates (power sorted)\n`!ares` (or `!ar`) - Ares coordinates\n`!pyramid [level]` (or `!py [level]`) - Pyramid coordinates (e.g., `!py 5`)",
+            "`!barbarian` (or `!bb`) - Barbarian coordinates (power sorted)\n`!ares` (or `!ar`) - Ares coordinates\n`!witch` (or `!wt`) - Mysterious Witch coordinates\n`!goblin` (or `!gb`) - Golden Goblin coordinates\n`!pyramid [level]` (or `!py [level]`) - Pyramid coordinates (e.g., `!py 5`)",
           inline: false,
         },
         {
@@ -68,7 +68,7 @@ const helpCommand: Command = {
         {
           name: "🔔 Alert Commands",
           value:
-            "`!alert <type> [level]` - Set DM alert (e.g., `!alert pyramid 5`)\n`!alerts` - View your alerts\n`!alert off [type]` - Remove alert(s)",
+            "`!alert <type> [level]` - Set DM alert (e.g., `!alert pyramid 5`)\n  Types: `pyramid`, `barbarian`, `ares`, `witch`, `goblin`\n`!alerts` - View your alerts\n`!alert off [type]` - Remove alert(s)",
           inline: false,
         },
         {
@@ -601,7 +601,7 @@ const aboutCommand: Command = {
           name: "🔄 Auto-Update System",
           value:
             "**5-minute rotating schedule:**\n" +
-            "`0min` 🔺 Pyramid → `5min` 🗡️ Barbarian → `10min` ⚡ Ares → `15min` 🔺 Pyramid...\n" +
+            "`0min` 🔺 Pyramid → `5min` 🗡️ Barbarian → `10min` 👾 Monsters(Ares+Witch+Goblin) → `15min` 🔺 Pyramid...\n" +
             "→ Each type refreshes **every 15 minutes**\n" +
             "→ Check current status with `!status`",
           inline: false,
@@ -627,11 +627,13 @@ const aboutCommand: Command = {
           inline: false,
         },
         {
-          name: "⚡ Ares Features",
+          name: "👾 Monsters (Ares + Witch + Goblin)",
           value:
-            "**Quick and simple:**\n" +
+            "**Crawled together in one pass:**\n" +
+            "• `!ares` (`!ar`) - Ares Statue coordinates\n" +
+            "• `!witch` (`!wt`) - Mysterious Witch coordinates\n" +
+            "• `!goblin` (`!gb`) - Golden Goblin coordinates\n" +
             "• Distance-based sorting\n" +
-            "• Use `!ares` or `!ar`\n" +
             "• Auto-updates every 15 minutes",
           inline: false,
         },
@@ -693,6 +695,8 @@ const statusCommand: Command = {
     const metadata = cache.getMetadata();
     const barbarianCount = cache.get("barbarian").length;
     const aresCount = cache.get("ares").length;
+    const witchCount = cache.get("witch").length;
+    const goblinCount = cache.get("goblin").length;
     const pyramidCount = cache.get("pyramid").length;
     const status = scheduler.getCurrentStatus();
     const minutes = Math.floor(status.timeUntilNext / 60);
@@ -713,6 +717,16 @@ const statusCommand: Command = {
         {
           name: "⚡ Ares",
           value: `${aresCount} coordinates`,
+          inline: true,
+        },
+        {
+          name: "🧙 Witch",
+          value: `${witchCount} coordinates`,
+          inline: true,
+        },
+        {
+          name: "👺 Goblin",
+          value: `${goblinCount} coordinates`,
           inline: true,
         },
         {
@@ -876,7 +890,9 @@ const alertCommand: Command = {
               value:
                 "`!alert pyramid [level]` - Pyramid alert (e.g., `!alert pyramid 5`)\n" +
                 "`!alert barbarian [level]` - Barbarian alert\n" +
-                "`!alert ares [level]` - Ares alert",
+                "`!alert ares [level]` - Ares alert\n" +
+                "`!alert witch` - Witch alert\n" +
+                "`!alert goblin` - Goblin alert",
               inline: false,
             },
             {
@@ -913,9 +929,9 @@ const alertCommand: Command = {
         } else {
           // 특정 타입 알림 삭제
           const type = args[1].toLowerCase() as AlertType;
-          if (!["pyramid", "barbarian", "ares"].includes(type)) {
+          if (!["pyramid", "barbarian", "ares", "witch", "goblin"].includes(type)) {
             await message.reply(
-              "❌ Invalid type. Use: `pyramid`, `barbarian`, or `ares`",
+              "❌ Invalid type. Use: `pyramid`, `barbarian`, `ares`, `witch`, or `goblin`",
             );
             return;
           }
@@ -932,9 +948,9 @@ const alertCommand: Command = {
 
       // 타입 확인
       const type = args[0].toLowerCase() as AlertType;
-      if (!["pyramid", "barbarian", "ares"].includes(type)) {
+      if (!["pyramid", "barbarian", "ares", "witch", "goblin"].includes(type)) {
         await message.reply(
-          "❌ Invalid type. Use: `pyramid`, `barbarian`, or `ares`\nExample: `!alert pyramid 5`",
+          "❌ Invalid type. Use: `pyramid`, `barbarian`, `ares`, `witch`, or `goblin`\nExample: `!alert pyramid 5`",
         );
         return;
       }
@@ -960,7 +976,7 @@ const alertCommand: Command = {
       );
 
       const typeEmoji =
-        type === "pyramid" ? "🔺" : type === "barbarian" ? "🗡️" : "⚡";
+        type === "pyramid" ? "🔺" : type === "barbarian" ? "🗡️" : type === "witch" ? "🧙" : type === "goblin" ? "👺" : "⚡";
       const levelText = minLevel ? `Level ${minLevel}+` : "All levels";
 
       const embed = new EmbedBuilder()
@@ -1237,12 +1253,10 @@ const alertsCommand: Command = {
         .setTimestamp();
 
       for (const alert of alerts) {
-        const typeEmoji =
-          alert.type === "pyramid"
-            ? "🔺"
-            : alert.type === "barbarian"
-              ? "🗡️"
-              : "⚡";
+        const emojiMap: Record<string, string> = {
+          pyramid: "🔺", barbarian: "🗡️", ares: "⚡", witch: "🧙", goblin: "👺",
+        };
+        const typeEmoji = emojiMap[alert.type] || "❓";
         const typeName =
           alert.type.charAt(0).toUpperCase() + alert.type.slice(1);
         const levelText = alert.minLevel
@@ -1416,12 +1430,168 @@ const barbarianPowerCommand: Command = {
   },
 };
 
+// Witch coordinates command
+const witchCommand: Command = {
+  name: "witch",
+  description: "Display Mysterious Witch coordinates",
+  usage: "!witch",
+  execute: async (message: Message, args: string[]) => {
+    if (message.channel.isSendable()) {
+      await message.channel.sendTyping();
+    }
+
+    try {
+      const userPosition = await db.getUserPosition(message.author.id);
+      let coordinates = await fetchCoordinates("witch");
+
+      if (coordinates.length === 0) {
+        const status = scheduler.getCurrentStatus();
+        const embed = new EmbedBuilder()
+          .setTitle("🧙 Witch Coordinates")
+          .setDescription("⚠️ No Mysterious Witch coordinates available at the moment.")
+          .setColor(0x9b59b6)
+          .addFields(
+            {
+              name: "🔄 Next Update",
+              value: `In **${Math.floor(status.timeUntilNext / 60)}m ${status.timeUntilNext % 60}s**`,
+              inline: true,
+            },
+            { name: "📅 Auto-Crawl", value: "Every 15 minutes", inline: true },
+          )
+          .setTimestamp();
+
+        await message.reply({ embeds: [embed] });
+        return;
+      }
+
+      let sortedCoordinates: (Coordinate & { distance?: number })[];
+      if (userPosition) {
+        sortedCoordinates = sortByDistance(coordinates, userPosition.x, userPosition.y);
+      } else {
+        sortedCoordinates = coordinates;
+      }
+
+      const embed = new EmbedBuilder()
+        .setTitle("🧙 Mysterious Witch Coordinates")
+        .setDescription(
+          `Found ${sortedCoordinates.length} Mysterious Witch` +
+            (userPosition
+              ? "\n📊 Sorted by: Distance ↑"
+              : "\n\n💡 **Tip**: Use `!setpos <X> <Y>` to sort by distance"),
+        )
+        .setColor(0x9b59b6)
+        .setTimestamp();
+
+      const maxDisplay = Math.min(sortedCoordinates.length, 25);
+      sortedCoordinates.slice(0, maxDisplay).forEach((coord, index) => {
+        let value = `X: \`${coord.x}\` Y: \`${coord.y}\``;
+        if (coord.distance !== undefined) {
+          value += `\n📏 Distance: ${Math.round(coord.distance)}`;
+        }
+        embed.addFields({
+          name: `#${index + 1}`,
+          value,
+          inline: true,
+        });
+      });
+
+      if (sortedCoordinates.length > maxDisplay) {
+        embed.setFooter({ text: `Showing ${maxDisplay}/${sortedCoordinates.length}` });
+      }
+
+      await message.reply({ embeds: [embed] });
+    } catch (error) {
+      console.error("Failed to fetch Witch coordinates:", error);
+      await message.reply("❌ An error occurred while fetching coordinate information.");
+    }
+  },
+};
+
+// Goblin coordinates command
+const goblinCommand: Command = {
+  name: "goblin",
+  description: "Display Golden Goblin coordinates",
+  usage: "!goblin",
+  execute: async (message: Message, args: string[]) => {
+    if (message.channel.isSendable()) {
+      await message.channel.sendTyping();
+    }
+
+    try {
+      const userPosition = await db.getUserPosition(message.author.id);
+      let coordinates = await fetchCoordinates("goblin");
+
+      if (coordinates.length === 0) {
+        const status = scheduler.getCurrentStatus();
+        const embed = new EmbedBuilder()
+          .setTitle("👺 Goblin Coordinates")
+          .setDescription("⚠️ No Golden Goblin coordinates available at the moment.")
+          .setColor(0x2ecc71)
+          .addFields(
+            {
+              name: "🔄 Next Update",
+              value: `In **${Math.floor(status.timeUntilNext / 60)}m ${status.timeUntilNext % 60}s**`,
+              inline: true,
+            },
+            { name: "📅 Auto-Crawl", value: "Every 15 minutes", inline: true },
+          )
+          .setTimestamp();
+
+        await message.reply({ embeds: [embed] });
+        return;
+      }
+
+      let sortedCoordinates: (Coordinate & { distance?: number })[];
+      if (userPosition) {
+        sortedCoordinates = sortByDistance(coordinates, userPosition.x, userPosition.y);
+      } else {
+        sortedCoordinates = coordinates;
+      }
+
+      const embed = new EmbedBuilder()
+        .setTitle("👺 Golden Goblin Coordinates")
+        .setDescription(
+          `Found ${sortedCoordinates.length} Golden Goblin` +
+            (userPosition
+              ? "\n📊 Sorted by: Distance ↑"
+              : "\n\n💡 **Tip**: Use `!setpos <X> <Y>` to sort by distance"),
+        )
+        .setColor(0x2ecc71)
+        .setTimestamp();
+
+      const maxDisplay = Math.min(sortedCoordinates.length, 25);
+      sortedCoordinates.slice(0, maxDisplay).forEach((coord, index) => {
+        let value = `X: \`${coord.x}\` Y: \`${coord.y}\``;
+        if (coord.distance !== undefined) {
+          value += `\n📏 Distance: ${Math.round(coord.distance)}`;
+        }
+        embed.addFields({
+          name: `#${index + 1}`,
+          value,
+          inline: true,
+        });
+      });
+
+      if (sortedCoordinates.length > maxDisplay) {
+        embed.setFooter({ text: `Showing ${maxDisplay}/${sortedCoordinates.length}` });
+      }
+
+      await message.reply({ embeds: [embed] });
+    } catch (error) {
+      console.error("Failed to fetch Goblin coordinates:", error);
+      await message.reply("❌ An error occurred while fetching coordinate information.");
+    }
+  },
+};
+
 // Commands array
 export const commands: Command[] = [
   helpCommand,
   aboutCommand,
   barbarianCommand,
   aresCommand,
+  witchCommand,
+  goblinCommand,
   pyramidCommand,
   statusCommand,
   setPositionCommand,
@@ -1439,6 +1609,10 @@ export const commandAliases: { [key: string]: string } = {
   barb: "barbarian",
 
   ar: "ares",
+
+  wt: "witch",
+
+  gb: "goblin",
 
   py: "pyramid",
   pyr: "pyramid",
