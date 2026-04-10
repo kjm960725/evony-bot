@@ -419,6 +419,77 @@ class ScraperService {
   }
 
   /**
+   * 아코디언 섹션 헤더(div)를 텍스트로 찾아 마우스 클릭.
+   *
+   * iScout UI의 필터 섹션(Monsters, Resources, Relics/Pyramids, Arctic Barbarians 등)은
+   * <button>이 아닌 <div> 아코디언 헤더로 구현됨.
+   * clickButtonNative / clickElementByText는 부모 컨테이너를 잘못 클릭할 수 있으므로
+   * 가장 작은(leaf에 가까운) 매칭 요소를 찾아 스크롤 후 mouse.click으로 정확히 클릭.
+   */
+  private async clickSectionHeader(headerText: string): Promise<boolean> {
+    // 1) 해당 텍스트를 포함하는 가장 작은 요소를 스크롤 into view
+    const scrolled = await this.page!.evaluate((text: string) => {
+      const allEls = Array.from(document.querySelectorAll("div, span, p"));
+      let best: { el: Element; area: number } | null = null;
+
+      for (const el of allEls) {
+        const content = (el.textContent || "").trim();
+        if (!content.includes(text)) continue;
+
+        const rect = (el as HTMLElement).getBoundingClientRect();
+        if (rect.width === 0 || rect.height === 0) continue;
+
+        const area = rect.width * rect.height;
+        if (!best || area < best.area) {
+          best = { el, area };
+        }
+      }
+
+      if (best) {
+        (best.el as HTMLElement).scrollIntoView({
+          block: "center",
+          inline: "nearest",
+        });
+        return true;
+      }
+      return false;
+    }, headerText);
+
+    if (!scrolled) return false;
+    await this.page!.waitForTimeout(500);
+
+    // 2) 스크롤 후 다시 좌표를 구해 마우스 클릭
+    const pos = await this.page!.evaluate((text: string) => {
+      const allEls = Array.from(document.querySelectorAll("div, span, p"));
+      let best: { x: number; y: number; area: number } | null = null;
+
+      for (const el of allEls) {
+        const content = (el.textContent || "").trim();
+        if (!content.includes(text)) continue;
+
+        const rect = (el as HTMLElement).getBoundingClientRect();
+        if (rect.width === 0 || rect.height === 0) continue;
+
+        const area = rect.width * rect.height;
+        if (!best || area < best.area) {
+          best = {
+            x: rect.left + rect.width / 2,
+            y: rect.top + rect.height / 2,
+            area,
+          };
+        }
+      }
+      return best;
+    }, headerText);
+
+    if (pos) {
+      await this.page!.mouse.click(pos.x, pos.y);
+      return true;
+    }
+    return false;
+  }
+
+  /**
    * Presets list → EvonyBot 선택.
    *
    * 근본 원인: menuitem은 [텍스트 div] + [X 삭제 버튼] 구조.
@@ -623,22 +694,16 @@ class ScraperService {
       // 1-2. EvonyBot 프리셋 선택 (네이티브 클릭)
       await this.selectEvonyBotPreset();
 
-      // 3. "Arctic Barbarians" 버튼 클릭 (네이티브 클릭)
-      console.log('   Clicking "Arctic Barbarians" button...');
+      // 3. "Arctic Barbarians" 섹션 헤더 클릭 (아코디언 <div> 헤더)
+      console.log('   Clicking "Arctic Barbarians" section header...');
       const arcticBarbarianClicked =
-        (await this.clickButtonNative((text) =>
-          text.includes("Arctic Barbarians"),
-        )) ||
-        (await this.clickElementByText(
-          "div, span, label",
-          "Arctic Barbarians",
-        ));
+        await this.clickSectionHeader("Arctic Barbarians");
 
       if (arcticBarbarianClicked) {
-        console.log('   ✅ "Arctic Barbarians" button clicked');
+        console.log('   ✅ "Arctic Barbarians" section header clicked');
         await this.page!.waitForTimeout(1000);
       } else {
-        console.log('   ⚠️ "Arctic Barbarians" button not found');
+        console.log('   ⚠️ "Arctic Barbarians" section header not found');
         await this.page!.screenshot({
           path: "debug-barbarian-buttons.png",
           fullPage: true,
@@ -850,22 +915,17 @@ class ScraperService {
       // 1-2. EvonyBot 프리셋 선택 (네이티브 클릭)
       await this.selectEvonyBotPreset();
 
-      // 3. "Relics/Pyramids" 버튼 클릭 (네이티브 클릭)
-      console.log('   Clicking "Relics/Pyramids" button...');
-      const relicsPyramidsClicked =
-        (await this.clickButtonNative(
-          (text) =>
-            text.includes("Relics/Pyramids") ||
-            text.includes("Relics") ||
-            text.includes("Pyramids"),
-        )) ||
-        (await this.clickElementByText("div, span, label", "Relics/Pyramids"));
+      // 3. "Relics/Pyramids" 섹션 헤더 클릭 (아코디언 <div> 헤더)
+      console.log('   Clicking "Relics/Pyramids" section header...');
+      const relicsPyramidsClicked = await this.clickSectionHeader(
+        "Relics/Pyramids",
+      );
 
       if (relicsPyramidsClicked) {
-        console.log('   ✅ "Relics/Pyramids" button clicked');
+        console.log('   ✅ "Relics/Pyramids" section header clicked');
         await this.page!.waitForTimeout(1000);
       } else {
-        console.log('   ⚠️ "Relics/Pyramids" button not found');
+        console.log('   ⚠️ "Relics/Pyramids" section header not found');
         await this.page!.screenshot({
           path: "debug-pyramid-buttons.png",
           fullPage: true,
@@ -877,6 +937,28 @@ class ScraperService {
 
       // 5. 좌표 데이터 추출 (뷰포트 10000px로 모든 행이 DOM에 렌더링됨)
       console.log("   Extracting coordinates from table...");
+      const debugInfo = await this.page!.evaluate(() => {
+        const rows = document.querySelectorAll("tr");
+        const firstRowTexts: string[] = [];
+        for (let i = 0; i < Math.min(rows.length, 3); i++) {
+          firstRowTexts.push(
+            (rows[i].textContent || "").trim().substring(0, 120),
+          );
+        }
+        return {
+          trCount: rows.length,
+          firstRows: firstRowTexts,
+          pageUrl: window.location.href,
+        };
+      });
+      console.log(`   📋 Debug: ${debugInfo.trCount} <tr> elements found`);
+      console.log(`   📋 Debug: URL = ${debugInfo.pageUrl}`);
+      if (debugInfo.firstRows.length > 0) {
+        console.log(
+          `   📋 Debug: First row text = "${debugInfo.firstRows[0]}"`,
+        );
+      }
+
       const coordinates = await this.page!.evaluate(() => {
         const results: any[] = [];
         const rows = document.querySelectorAll("tr");
@@ -888,13 +970,23 @@ class ScraperService {
             const itemText = itemDiv?.textContent?.trim() || "";
             if (!itemText.includes("Pyramid")) return;
 
-            const xDiv = row.querySelector('[data-tooltip-id$="_x"]');
-            const xText = xDiv?.textContent?.trim() || "";
-            const yDivs = row.querySelectorAll('[data-tooltip-id$="_y"]');
-            const yText = yDivs[0]?.textContent?.trim() || "";
-
-            const xMatch = xText.match(/X:\s*(\d+)/);
-            const yMatch = yText.match(/Y:\s*(\d+)/);
+            let xMatch = null;
+            let yMatch = null;
+            const allDivs = row.querySelectorAll("div[data-tooltip-id]");
+            for (const div of allDivs) {
+              const tooltipId =
+                (div as any).getAttribute("data-tooltip-id") || "";
+              const divText = (div as any).textContent?.trim() || "";
+              if (tooltipId.includes("_x") && !xMatch) {
+                const test = divText.match(/X:\s*(\d+)/);
+                if (test) xMatch = test;
+              }
+              if (tooltipId.includes("_y") && !yMatch) {
+                const test = divText.match(/Y:\s*(\d+)/);
+                if (test) yMatch = test;
+              }
+              if (xMatch && yMatch) break;
+            }
             if (!xMatch || !yMatch) return;
 
             const x = parseInt(xMatch[1]);
