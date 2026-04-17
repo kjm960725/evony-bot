@@ -1,9 +1,7 @@
 // Auto-update Scheduler - 5분마다 순환 크롤링
 import { cache } from './cache';
 import { scraper } from './scraper';
-import { notification } from './notification';
 import { CoordinateType, getTypeEmoji } from '../utils/coordinateTypes';
-import { AlertType } from './db';
 
 class SchedulerService {
   private intervalId: NodeJS.Timeout | null = null;
@@ -61,16 +59,8 @@ class SchedulerService {
         await this.updateMonsters();
       } else {
         const cacheType = type as 'barbarian' | 'pyramid';
-        const previousCoordinates = cache.get(cacheType);
         const coordinates = await this.scrapeByType(type);
         cache.set(cacheType, coordinates);
-
-        if (coordinates.length > 0) {
-          const alertsSent = await notification.sendAlerts(cacheType, coordinates, previousCoordinates);
-          if (alertsSent > 0) {
-            console.log(`   🔔 Sent ${alertsSent} alert(s)`);
-          }
-        }
       }
       
       this.nextUpdateTime = new Date(Date.now() + this.UPDATE_INTERVAL);
@@ -88,12 +78,8 @@ class SchedulerService {
     }
   }
 
-  // Monsters 크롤링 → ares/witch/goblin 3종 캐시 저장 + 알림 발송
+  // Monsters 크롤링 → ares/witch/goblin 3종 캐시 저장
   private async updateMonsters(): Promise<void> {
-    const prevAres = cache.get('ares');
-    const prevWitch = cache.get('witch');
-    const prevGoblin = cache.get('goblin');
-
     const { ares, witch, goblin } = await scraper.scrapeMonsters();
 
     cache.set('ares', ares);
@@ -101,18 +87,6 @@ class SchedulerService {
     cache.set('goblin', goblin);
 
     console.log(`   - Ares: ${ares.length}, Witch: ${witch.length}, Goblin: ${goblin.length}`);
-
-    const alertTypes: { type: AlertType; coords: typeof ares; prev: typeof ares }[] = [
-      { type: 'ares', coords: ares, prev: prevAres },
-      { type: 'witch', coords: witch, prev: prevWitch },
-      { type: 'goblin', coords: goblin, prev: prevGoblin },
-    ];
-    for (const { type, coords, prev } of alertTypes) {
-      if (coords.length > 0) {
-        const sent = await notification.sendAlerts(type, coords, prev);
-        if (sent > 0) console.log(`   🔔 Sent ${sent} ${type} alert(s)`);
-      }
-    }
   }
 
   private async updateAll(): Promise<void> {

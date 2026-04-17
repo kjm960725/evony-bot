@@ -8,7 +8,7 @@ import {
 import * as fs from "fs";
 import * as path from "path";
 import { cache } from "../services/cache";
-import { AlertType, db } from "../services/db";
+import { db } from "../services/db";
 import { scheduler } from "../services/scheduler";
 import { Coordinate } from "../types/coordinate";
 import {
@@ -63,12 +63,6 @@ const helpCommand: Command = {
           name: "⚔️ Barbarian Settings",
           value:
             "`!bbpower <min> <max>` (or `!bbp`) - Set power range (e.g., `!bbpower 500M 2B`)\n`!bbpower` - View your current power range",
-          inline: false,
-        },
-        {
-          name: "🔔 Alert Commands",
-          value:
-            "`!alert <type> [level]` - Set DM alert (e.g., `!alert pyramid 5`)\n  Types: `pyramid`, `barbarian`, `ares`, `witch`, `goblin`\n`!alerts` - View your alerts\n`!alert off [type]` - Remove alert(s)",
           inline: false,
         },
         {
@@ -643,18 +637,7 @@ const aboutCommand: Command = {
             "**Set your city location** (`!setpos X Y`):\n" +
             "✅ All coordinates sorted by distance\n" +
             "✅ Distance displayed for each target\n" +
-            "✅ Alert notifications include distance\n" +
             "→ **Find the closest targets instantly!**",
-          inline: false,
-        },
-        {
-          name: "🔔 Smart Alert System",
-          value:
-            "**Get DM alerts** for new targets (`!alert <type> [level]`):\n" +
-            "• **Real-time**: Notified within 15 minutes\n" +
-            "• **Anti-spam**: Deduplication (±10 range, 24h)\n" +
-            "• **Filtered**: By level, distance, and power\n" +
-            "• **Persistent**: Settings saved per user",
           inline: false,
         },
         {
@@ -662,9 +645,7 @@ const aboutCommand: Command = {
           value:
             "**SQLite + Prisma** stores your preferences:\n" +
             "• City coordinates (permanent)\n" +
-            "• Power ranges (per user)\n" +
-            "• Alert settings (customizable)\n" +
-            "• Alert history (anti-duplicate)",
+            "• Power ranges (per user)",
           inline: false,
         },
         {
@@ -672,8 +653,7 @@ const aboutCommand: Command = {
           value:
             "1️⃣ `!setpos 500 600` - Save your city location\n" +
             "2️⃣ `!bbpower 300M 1B` - Set barbarian power filter\n" +
-            "3️⃣ `!alert barbarian 6` - Get alerts for Lv6+ barbarians\n" +
-            "4️⃣ `!bb` - View your personalized barbarian list!",
+            "3️⃣ `!bb` - View your personalized barbarian list!",
           inline: false,
         },
       )
@@ -867,139 +847,6 @@ const getPositionCommand: Command = {
       await message.reply(
         "❌ An error occurred while retrieving your position.",
       );
-    }
-  },
-};
-
-// Alert command - 알림 설정
-const alertCommand: Command = {
-  name: "alert",
-  description: "Set up alerts for new coordinates",
-  usage: "!alert <type> [level] | !alert off [type]",
-  execute: async (message: Message, args: string[]) => {
-    try {
-      // 인수 확인
-      if (args.length === 0) {
-        const embed = new EmbedBuilder()
-          .setTitle("🔔 Alert Command Usage")
-          .setColor(0x0099ff)
-          .setDescription("Set up DM alerts when new coordinates are found!")
-          .addFields(
-            {
-              name: "📝 Set Alert",
-              value:
-                "`!alert pyramid [level]` - Pyramid alert (e.g., `!alert pyramid 5`)\n" +
-                "`!alert barbarian [level]` - Barbarian alert\n" +
-                "`!alert ares [level]` - Ares alert\n" +
-                "`!alert witch` - Witch alert\n" +
-                "`!alert goblin` - Goblin alert",
-              inline: false,
-            },
-            {
-              name: "🔕 Remove Alert",
-              value:
-                "`!alert off pyramid` - Remove pyramid alert\n" +
-                "`!alert off` - Remove all alerts",
-              inline: false,
-            },
-            {
-              name: "📋 View Alerts",
-              value: "`!alerts` - View your current alert settings",
-              inline: false,
-            },
-          )
-          .setFooter({
-            text: "Tip: Set your position with !setpos for distance-based filtering",
-          });
-
-        await message.reply({ embeds: [embed] });
-        return;
-      }
-
-      // !alert off 처리
-      if (args[0].toLowerCase() === "off") {
-        if (args.length === 1) {
-          // 모든 알림 삭제
-          const deletedCount = await db.deleteAllAlerts(message.author.id);
-          if (deletedCount > 0) {
-            await message.reply(`🔕 Removed ${deletedCount} alert(s).`);
-          } else {
-            await message.reply("ℹ️ You have no active alerts.");
-          }
-        } else {
-          // 특정 타입 알림 삭제
-          const type = args[1].toLowerCase() as AlertType;
-          if (!["pyramid", "barbarian", "ares", "witch", "goblin"].includes(type)) {
-            await message.reply(
-              "❌ Invalid type. Use: `pyramid`, `barbarian`, `ares`, `witch`, or `goblin`",
-            );
-            return;
-          }
-
-          const deleted = await db.deleteAlert(message.author.id, type);
-          if (deleted) {
-            await message.reply(`🔕 Removed ${type} alert.`);
-          } else {
-            await message.reply(`ℹ️ You don't have a ${type} alert.`);
-          }
-        }
-        return;
-      }
-
-      // 타입 확인
-      const type = args[0].toLowerCase() as AlertType;
-      if (!["pyramid", "barbarian", "ares", "witch", "goblin"].includes(type)) {
-        await message.reply(
-          "❌ Invalid type. Use: `pyramid`, `barbarian`, `ares`, `witch`, or `goblin`\nExample: `!alert pyramid 5`",
-        );
-        return;
-      }
-
-      // 레벨 파싱 (옵션)
-      let minLevel: number | undefined;
-      if (args.length >= 2) {
-        minLevel = parseInt(args[1]);
-        if (isNaN(minLevel) || minLevel < 1 || minLevel > 10) {
-          await message.reply(
-            "❌ Level must be a number between 1 and 10.\nExample: `!alert pyramid 5`",
-          );
-          return;
-        }
-      }
-
-      // 알림 설정 저장
-      await db.setAlert(
-        message.author.id,
-        message.author.username,
-        type,
-        minLevel,
-      );
-
-      const typeEmoji =
-        type === "pyramid" ? "🔺" : type === "barbarian" ? "🗡️" : type === "witch" ? "🧙" : type === "goblin" ? "👺" : "⚡";
-      const levelText = minLevel ? `Level ${minLevel}+` : "All levels";
-
-      const embed = new EmbedBuilder()
-        .setTitle("🔔 Alert Set!")
-        .setColor(0x00ff00)
-        .setDescription(
-          `You will receive a DM when new ${type} coordinates are found.`,
-        )
-        .addFields(
-          {
-            name: "Type",
-            value: `${typeEmoji} ${type.charAt(0).toUpperCase() + type.slice(1)}`,
-            inline: true,
-          },
-          { name: "Level Filter", value: levelText, inline: true },
-        )
-        .setFooter({ text: "Use !alerts to view all your alerts" })
-        .setTimestamp();
-
-      await message.reply({ embeds: [embed] });
-    } catch (error) {
-      console.error("Failed to set alert:", error);
-      await message.reply("❌ An error occurred while setting the alert.");
     }
   },
 };
@@ -1230,59 +1077,6 @@ async function sendLogPage(
     components: [row1, row2],
   });
 }
-
-// Alerts command - 알림 목록 보기
-const alertsCommand: Command = {
-  name: "alerts",
-  description: "View your current alert settings",
-  usage: "!alerts",
-  execute: async (message: Message, args: string[]) => {
-    try {
-      const alerts = await db.getAllAlerts(message.author.id);
-
-      if (alerts.length === 0) {
-        await message.reply(
-          "ℹ️ You have no active alerts.\nUse `!alert <type> [level]` to set up alerts.",
-        );
-        return;
-      }
-
-      const embed = new EmbedBuilder()
-        .setTitle("🔔 Your Alert Settings")
-        .setColor(0x0099ff)
-        .setTimestamp();
-
-      for (const alert of alerts) {
-        const emojiMap: Record<string, string> = {
-          pyramid: "🔺", barbarian: "🗡️", ares: "⚡", witch: "🧙", goblin: "👺",
-        };
-        const typeEmoji = emojiMap[alert.type] || "❓";
-        const typeName =
-          alert.type.charAt(0).toUpperCase() + alert.type.slice(1);
-        const levelText = alert.minLevel
-          ? `Level ${alert.minLevel}+`
-          : "All levels";
-        const distanceText = alert.maxDistance
-          ? `≤ ${alert.maxDistance}`
-          : "No limit";
-        const statusText = alert.enabled ? "✅ Active" : "⏸️ Paused";
-
-        embed.addFields({
-          name: `${typeEmoji} ${typeName}`,
-          value: `Level: ${levelText}\nDistance: ${distanceText}\nStatus: ${statusText}`,
-          inline: true,
-        });
-      }
-
-      embed.setFooter({ text: "Use !alert off <type> to remove an alert" });
-
-      await message.reply({ embeds: [embed] });
-    } catch (error) {
-      console.error("Failed to get alerts:", error);
-      await message.reply("❌ An error occurred while retrieving your alerts.");
-    }
-  },
-};
 
 // 파워 문자열을 숫자로 변환 (예: "500M" -> 500000000)
 function parsePowerString(powerStr: string): number | null {
@@ -1597,8 +1391,6 @@ export const commands: Command[] = [
   setPositionCommand,
   getPositionCommand,
   allPositionsCommand,
-  alertCommand,
-  alertsCommand,
   logsCommand,
   barbarianPowerCommand,
 ];

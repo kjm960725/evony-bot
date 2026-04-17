@@ -5,7 +5,6 @@ import * as fs from 'fs';
 import { commands, commandAliases } from './commands';
 import { scheduler } from './services/scheduler';
 import { scraper } from './services/scraper';
-import { notification } from './services/notification';
 
 // 환경 변수 로드 (프로젝트 루트의 .env 파일 명시)
 const envPath = path.join(__dirname, '../.env');
@@ -43,10 +42,6 @@ client.once(Events.ClientReady, async (c: Client<true>) => {
     status: 'online',
   });
 
-  // Initialize notification service with Discord client
-  notification.setClient(c);
-
-  // Start auto-update scheduler
   console.log('🚀 Starting services...');
   scheduler.start();
 });

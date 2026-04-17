@@ -9,7 +9,6 @@ A Discord bot that shares Barbarian, Ares, and Pyramid coordinates for the Evony
 - ✅ Pyramid coordinate lookup (with level filtering)
 - ✅ Automatic web scraping from iScout.club (Puppeteer)
 - ✅ User coordinate storage and distance-based sorting
-- ✅ DM notification system (level/distance filters)
 - ✅ Auto-scraping scheduler (5-minute rotation)
 - ✅ Server log viewing (pagination/filtering)
 - ✅ Command alias support
@@ -167,25 +166,6 @@ Once you save your coordinates with `!setpos`:
 !pyramid 5        # Level 5 only, sorted by distance
 ```
 
-### 🔔 Smart Notification System
-
-Get DM notifications when new coordinates of desired type/level are found:
-
-**Features**:
-
-- Level filtering (e.g., level 5+ only)
-- Duplicate notification prevention (within ±10 range for 24 hours)
-- Only notifies for genuinely new coordinates
-- Includes distance information (when coordinates are saved)
-
-**Usage Examples**:
-
-```bash
-!alert pyramid 5           # Notify for level 5+ pyramids
-!alert barbarian          # Notify for all barbarians
-!alerts                   # View your alerts
-```
-
 ## 📝 Available Commands
 
 ### 📍 Coordinate Commands
@@ -203,14 +183,6 @@ Get DM notifications when new coordinates of desired type/level are found:
 | `!setpos <X> <Y>` | `!pos`, `!position` | Save your coordinates       |
 | `!mypos`          | `!getpos`           | View your saved coordinates |
 | `!positions`      | -                   | View all user coordinates   |
-
-### 🔔 Notification Commands
-
-| Command                | Description                               |
-| ---------------------- | ----------------------------------------- |
-| `!alert <type> [level]` | Set alert (e.g., `!alert pyramid 5`)      |
-| `!alerts`              | View your alert settings                  |
-| `!alert off [type]`    | Delete alert                              |
 
 ### ⚙️ System Commands
 
@@ -235,13 +207,6 @@ Get DM notifications when new coordinates of desired type/level are found:
 !mypos
 !positions
 
-# Alert settings
-!alert pyramid 5      # Alert for level 5+ pyramids
-!alert barbarian      # Alert for all barbarians
-!alerts               # Check your alerts
-!alert off pyramid    # Delete pyramid alerts
-!alert off            # Delete all alerts
-
 # System
 !status
 !logs
@@ -259,7 +224,6 @@ evony-bot/
 │   ├── services/
 │   │   ├── cache.ts          # Scraping data caching
 │   │   ├── db.ts             # Prisma database service
-│   │   ├── notification.ts   # DM notification sending
 │   │   ├── scheduler.ts      # Auto-scraping scheduler
 │   │   └── scraper.ts        # Puppeteer web scraping
 │   ├── types/
@@ -337,24 +301,8 @@ The bot uses Prisma and SQLite to store the following data:
 - Discord ID
 - Username
 - X, Y coordinates
+- Min/Max power range (barbarian filter)
 - Created/Updated timestamps
-
-### UserAlert (Alert Settings)
-
-- Discord ID
-- Alert type (pyramid/barbarian/ares)
-- Minimum level
-- Maximum distance
-- Active status
-
-### SentAlert (Alert History)
-
-- Discord ID
-- Type, level, power
-- X, Y coordinates
-- Sent timestamp
-
-**Duplicate Alert Prevention**: Prevents duplicate alerts to the same coordinate area (±10) within 24 hours.
 
 ## 🔧 TypeScript Configuration
 
@@ -469,7 +417,7 @@ pm2 stop evony-bot && pm2 delete evony-bot && pm2 start ecosystem.config.js
 - ⚠️ **Database (`.db`) files are also excluded** - Preserves existing server data
 - ⚠️ **PUPPETEER_EXECUTABLE_PATH** - Use `/usr/bin/chromium` on ARM64 servers
 - ⚠️ **Prisma Migrations** - Deployment script automatically runs `prisma migrate deploy` on schema changes
-- ✅ **Safe Deployment** - All user data, alert settings, and coordinate data are preserved
+- ✅ **Safe Deployment** - All user data and coordinate data are preserved
 
 ## 📚 References
 
