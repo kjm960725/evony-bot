@@ -42,6 +42,23 @@ class SchedulerService {
     await this.updateAll();
   }
 
+  /**
+   * Player Watch 활성 시, 스케줄된 스크랩 종료 직후 Watch 필터를 재적용하여
+   * Players 화면 + WS 리스닝 상태로 즉시 복귀시킨다.
+   *
+   * 순환 import 회피를 위해 dynamic import 사용 (player.ts → scheduler.ts 의존이 이미 있음).
+   */
+  private async reapplyWatchIfActive(): Promise<void> {
+    try {
+      const { playerWatchService } = await import('./player');
+      if (!playerWatchService.isActive()) return;
+      console.log('🔁 Scheduled scrape done — re-applying Watch filter to resume listening');
+      await playerWatchService.reapplyAfterScrape();
+    } catch (e) {
+      console.error('⚠️ Failed to reapply Watch after scrape:', (e as Error).message);
+    }
+  }
+
   private async updateNext(): Promise<void> {
     if (cache.getMetadata().isUpdating) {
       console.log('⏭️ Update already in progress, skipping...');
@@ -75,6 +92,9 @@ class SchedulerService {
     } catch (error) {
       console.error(`❌ ${type.toUpperCase()} crawl failed:`, error);
       cache.setUpdating(false);
+    } finally {
+      // 성공/실패와 무관하게 Watch 활성 시 즉시 리스닝 복귀
+      await this.reapplyWatchIfActive();
     }
   }
 
@@ -115,6 +135,9 @@ class SchedulerService {
     } catch (error) {
       console.error('❌ Full crawl failed:', error);
       cache.setUpdating(false);
+    } finally {
+      // 성공/실패와 무관하게 Watch 활성 시 즉시 리스닝 복귀
+      await this.reapplyWatchIfActive();
     }
   }
 

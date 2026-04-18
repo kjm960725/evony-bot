@@ -9,6 +9,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { cache } from "../services/cache";
 import { db } from "../services/db";
+import { playerWatchService } from "../services/player";
 import { scheduler } from "../services/scheduler";
 import { Coordinate } from "../types/coordinate";
 import {
@@ -63,6 +64,17 @@ const helpCommand: Command = {
           name: "⚔️ Barbarian Settings",
           value:
             "`!bbpower <min> <max>` (or `!bbp`) - Set power range (e.g., `!bbpower 500M 2B`)\n`!bbpower` - View your current power range",
+          inline: false,
+        },
+        {
+          name: "🫧 Player Watch (real-time bubble alerts)",
+          value:
+            "`!watch <minPower> <maxPower> <name1> [name2] [name3] ...` - Start watching players\n" +
+            "`!watchstop` - Stop watching\n" +
+            "`!watchresume` - Resume from last saved config (DB)\n" +
+            "`!watchclear` - Delete saved watch config\n" +
+            "`!watchstatus` - Show current watch status (incl. WS stats)\n" +
+            'Example: `!watch 500M 2B Murda "Some Guy" Other`',
           inline: false,
         },
         {
@@ -1378,6 +1390,425 @@ const goblinCommand: Command = {
   },
 };
 
+/**
+ * 큰따옴표를 인식하는 토크나이저.
+ * 예) `500M 2B "Murda Inc." Player2` → ["500M", "2B", "Murda Inc.", "Player2"]
+ */
+function tokenizeWithQuotes(input: string): string[] {
+  const tokens: string[] = [];
+  let i = 0;
+  while (i < input.length) {
+    while (i < input.length && /\s/.test(input[i])) i++;
+    if (i >= input.length) break;
+
+    if (input[i] === '"' || input[i] === "'") {
+      const quote = input[i];
+      i++;
+      let end = input.indexOf(quote, i);
+      if (end === -1) end = input.length;
+      tokens.push(input.substring(i, end));
+      i = end + 1;
+    } else {
+      let end = i;
+      while (end < input.length && !/\s/.test(input[end])) end++;
+      tokens.push(input.substring(i, end));
+      i = end;
+    }
+  }
+  return tokens;
+}
+
+/**
+ * Watch 모드 시작 명령.
+ * 사용법: `!watch <minPower> <maxPower> <name1> [name2] [name3] ...`
+ *   - 파워 단위: K / M / B (예: 500M, 2B)
+ *   - 공백을 포함한 이름은 따옴표로 감싸기 (예: "Murda Inc.")
+ *
+ * 동작:
+ *   1) 기존 자동 크롤링 스케줄러를 중단
+ *   2) iScout Players 섹션을 열고 Power 범위 + Bubble=No 필터 적용
+ *   3) 페이지에 옵저버를 설치해 새 결과 행을 실시간 감지
+ *   4) Watch 대상 이름과 매칭되면 명령을 실행한 채널로 즉시 알림
+ */
+const watchCommand: Command = {
+  name: "watch",
+  description:
+    "Start Player Watch: real-time bubble-down alerts for specified players (stops auto-crawling)",
+  usage:
+    "!watch <minPower> <maxPower> <name1> [name2] [name3] ...  (e.g. !watch 500M 2B Murda \"Some Guy\")",
+  execute: async (message: Message, args: string[]) => {
+    try {
+      // 원본 메시지에서 커맨드 이름 뒤의 raw 문자열을 추출 → 따옴표 인식 토큰화
+      const raw = message.content.trim();
+      const afterPrefix = raw.replace(/^![\w]+\s*/i, "");
+      const tokens = tokenizeWithQuotes(afterPrefix);
+
+      if (tokens.length < 3) {
+        await message.reply(
+          "❌ Usage: `!watch <minPower> <maxPower> <name1> [name2] [name3] ...`\n" +
+            'Example: `!watch 500M 2B Murda "Some Guy" Other`\n' +
+            "Power units: K, M, B",
+        );
+        return;
+      }
+
+      const minPowerRaw = tokens[0];
+      const maxPowerRaw = tokens[1];
+      const names = tokens.slice(2);
+
+      const minPower = parsePowerString(minPowerRaw);
+      const maxPower = parsePowerString(maxPowerRaw);
+
+      if (minPower === null || maxPower === null) {
+        await message.reply(
+          "❌ Invalid power format.\n**Valid formats**: 100K, 500M, 1.5B\n**Units**: K, M, B",
+        );
+        return;
+      }
+      if (minPower >= maxPower) {
+        await message.reply("❌ Minimum power must be less than maximum power.");
+        return;
+      }
+
+      // iScout Power 입력은 Million 단위 - 내부 절대값 → M 단위 변환
+      const minPowerM = Math.max(1, Math.round(minPower / 1_000_000));
+      const maxPowerM = Math.max(minPowerM + 1, Math.round(maxPower / 1_000_000));
+
+      const channel = message.channel;
+      if (!channel || !channel.isSendable()) {
+        await message.reply(
+          "❌ This command must be used in a channel where the bot can send messages.",
+        );
+        return;
+      }
+
+      // 시작 임시 응답 (시간이 걸리는 작업 안내)
+      const startingEmbed = new EmbedBuilder()
+        .setTitle("🫧 Starting Player Watch...")
+        .setDescription(
+          `Stopping auto-crawler and applying Players filter.\nThis takes ~10–20 seconds.`,
+        )
+        .setColor(0xffa500)
+        .addFields(
+          {
+            name: "Power Range",
+            value: `${formatPower(minPower)} ~ ${formatPower(maxPower)} (${minPowerM}M ~ ${maxPowerM}M)`,
+            inline: false,
+          },
+          {
+            name: "Watch Targets",
+            value: names.map((n) => `• ${n}`).join("\n"),
+            inline: false,
+          },
+        )
+        .setTimestamp();
+      await message.reply({ embeds: [startingEmbed] });
+
+      try {
+        await playerWatchService.start({
+          channelId: channel.id,
+          channelSend: (payload: any) => (channel as any).send(payload),
+          minPower: minPowerM,
+          maxPower: maxPowerM,
+          names,
+        });
+      } catch (err) {
+        console.error("❌ Watch start failed:", err);
+        const errEmbed = new EmbedBuilder()
+          .setTitle("❌ Player Watch Failed to Start")
+          .setDescription(
+            `Error: ${err instanceof Error ? err.message : String(err)}\n\nThe auto-crawler has been restored.`,
+          )
+          .setColor(0xff0000)
+          .setTimestamp();
+        await channel.send({ embeds: [errEmbed] });
+        return;
+      }
+
+      const okEmbed = new EmbedBuilder()
+        .setTitle("✅ Player Watch Active")
+        .setDescription(
+          "Real-time alerts will be posted in this channel whenever a target's bubble drops.\nUse `!watchstop` to end Player Watch and resume auto-crawling.",
+        )
+        .setColor(0x00ff00)
+        .addFields(
+          {
+            name: "Power Range",
+            value: `${formatPower(minPower)} ~ ${formatPower(maxPower)}`,
+            inline: false,
+          },
+          {
+            name: "Watch Targets",
+            value: names.map((n) => `• ${n}`).join("\n"),
+            inline: false,
+          },
+          {
+            name: "Cooldown",
+            value: "Each target re-notifies after 5 minutes",
+            inline: false,
+          },
+        )
+        .setTimestamp();
+      await channel.send({ embeds: [okEmbed] });
+    } catch (error) {
+      console.error("Failed to start Player Watch:", error);
+      await message.reply("❌ An error occurred while starting Player Watch.");
+    }
+  },
+};
+
+/**
+ * Watch 모드 종료 명령.
+ * 옵저버 해제 + 기존 스케줄러 재시작.
+ */
+const watchStopCommand: Command = {
+  name: "watchstop",
+  description: "Stop Player Watch and resume auto-crawling",
+  usage: "!watchstop",
+  execute: async (message: Message) => {
+    try {
+      if (!playerWatchService.isActive()) {
+        await message.reply("ℹ️ Player Watch is not currently active.");
+        return;
+      }
+
+      const status = playerWatchService.getStatus();
+
+      const stoppingEmbed = new EmbedBuilder()
+        .setTitle("🛑 Stopping Player Watch...")
+        .setDescription("Disconnecting observer and restarting auto-crawler.")
+        .setColor(0xffa500)
+        .setTimestamp();
+      await message.reply({ embeds: [stoppingEmbed] });
+
+      await playerWatchService.stop();
+
+      const okEmbed = new EmbedBuilder()
+        .setTitle("✅ Player Watch Stopped")
+        .setDescription(
+          "Auto-crawling has been resumed (Pyramid → Barbarian → Monsters).",
+        )
+        .setColor(0x00ff00)
+        .addFields({
+          name: "Was Monitoring",
+          value: status.targetNames.length > 0
+            ? status.targetNames.map((n) => `• ${n}`).join("\n")
+            : "(none)",
+          inline: false,
+        })
+        .setTimestamp();
+      await message.reply({ embeds: [okEmbed] });
+    } catch (error) {
+      console.error("Failed to stop Player Watch:", error);
+      await message.reply("❌ An error occurred while stopping Player Watch.");
+    }
+  },
+};
+
+/** 현재 Watch 모드 상태 조회 */
+const watchStatusCommand: Command = {
+  name: "watchstatus",
+  description: "Show current Player Watch status",
+  usage: "!watchstatus",
+  execute: async (message: Message) => {
+    const status = playerWatchService.getStatus();
+    const embed = new EmbedBuilder()
+      .setTitle(`🫧 Player Watch — ${status.active ? "ACTIVE" : "INACTIVE"}`)
+      .setColor(status.active ? 0x3498db : 0x808080)
+      .setTimestamp();
+
+    if (status.active) {
+      const s = status.stats;
+      embed.addFields(
+        {
+          name: "Power Range (M)",
+          value: `${status.minPower} ~ ${status.maxPower}`,
+          inline: false,
+        },
+        {
+          name: "Targets",
+          value:
+            status.targetNames.length > 0
+              ? status.targetNames.map((n) => `• ${n}`).join("\n")
+              : "(none)",
+          inline: false,
+        },
+        {
+          name: "Channel",
+          value: status.channelId
+            ? `<#${status.channelId}>`
+            : "(unknown)",
+          inline: true,
+        },
+        {
+          name: "Started",
+          value: status.startedAt
+            ? `<t:${Math.floor(status.startedAt.getTime() / 1000)}:R>`
+            : "(unknown)",
+          inline: true,
+        },
+        {
+          name: "WebSocket Stats",
+          value:
+            `Frames received: **${s.wsFramesReceived}**\n` +
+            `Socket.IO events: **${s.socketIoEvents}**\n` +
+            `Events with players: **${s.eventsWithPlayers}**\n` +
+            `Players extracted: **${s.playersExtracted}**\n` +
+            `Matched targets: **${s.matched}**\n` +
+            `Notifications sent: **${s.notificationsSent}**`,
+          inline: false,
+        },
+      );
+    } else {
+      embed.setDescription(
+        "Player Watch is not active. Use `!watch <minPower> <maxPower> <name1> [name2] ...` to start.",
+      );
+    }
+
+    await message.reply({ embeds: [embed] });
+  },
+};
+
+/**
+ * Watch 모드 재개: DB에 저장된 마지막 Watch 설정으로 다시 모니터링 시작.
+ * 사용법: `!watchresume`
+ */
+const watchResumeCommand: Command = {
+  name: "watchresume",
+  description:
+    "Resume Player Watch using the last saved configuration (targets, power range, channel)",
+  usage: "!watchresume",
+  execute: async (message: Message) => {
+    try {
+      if (playerWatchService.isActive()) {
+        await message.reply(
+          "ℹ️ Player Watch is already active. Use `!watchstop` first if you want to restart.",
+        );
+        return;
+      }
+
+      const saved = await playerWatchService.getSavedConfig();
+      if (!saved) {
+        await message.reply(
+          "❌ No saved Watch configuration found. Use `!watch <minPower> <maxPower> <names...>` to start a new Player Watch first.",
+        );
+        return;
+      }
+
+      const channel = message.channel;
+      if (!channel || !channel.isSendable()) {
+        await message.reply(
+          "❌ This command must be used in a sendable channel.",
+        );
+        return;
+      }
+
+      // 저장된 channel과 호출 channel이 다르면 사용자가 알도록 표시
+      const savedChannelId = saved.channelId;
+      const willOverride = savedChannelId !== channel.id;
+
+      const startingEmbed = new EmbedBuilder()
+        .setTitle("▶️ Resuming Player Watch...")
+        .setDescription(
+          willOverride
+            ? `Using saved targets/power but **overriding channel** to <#${channel.id}> (saved was <#${savedChannelId}>).`
+            : "Using saved targets, power range, and channel.",
+        )
+        .setColor(0xffa500)
+        .addFields(
+          {
+            name: "Power Range (M)",
+            value: `${saved.minPower} ~ ${saved.maxPower}`,
+            inline: false,
+          },
+          {
+            name: "Targets",
+            value: saved.names.map((n) => `• ${n}`).join("\n"),
+            inline: false,
+          },
+          {
+            name: "Last saved",
+            value: `<t:${Math.floor(saved.updatedAt.getTime() / 1000)}:R>`,
+            inline: true,
+          },
+        )
+        .setTimestamp();
+      await message.reply({ embeds: [startingEmbed] });
+
+      try {
+        const result = await playerWatchService.resume({
+          overrideChannelId: channel.id,
+          channelSend: (payload: any) => (channel as any).send(payload),
+        });
+        if (!result.started) {
+          await channel.send(`❌ Resume failed: ${result.reason ?? "unknown"}`);
+          return;
+        }
+      } catch (err) {
+        console.error("Watch resume failed:", err);
+        const errEmbed = new EmbedBuilder()
+          .setTitle("❌ Watch Resume Failed")
+          .setDescription(
+            `Error: ${err instanceof Error ? err.message : String(err)}`,
+          )
+          .setColor(0xff0000)
+          .setTimestamp();
+        await channel.send({ embeds: [errEmbed] });
+        return;
+      }
+
+      const okEmbed = new EmbedBuilder()
+        .setTitle("✅ Player Watch Resumed")
+        .setDescription(
+          "Real-time alerts will be posted in this channel whenever a target's bubble drops.\nUse `!watchstop` to end Player Watch.",
+        )
+        .setColor(0x00ff00)
+        .addFields(
+          {
+            name: "Power Range (M)",
+            value: `${saved.minPower} ~ ${saved.maxPower}`,
+            inline: false,
+          },
+          {
+            name: "Targets",
+            value: saved.names.map((n) => `• ${n}`).join("\n"),
+            inline: false,
+          },
+        )
+        .setTimestamp();
+      await channel.send({ embeds: [okEmbed] });
+    } catch (error) {
+      console.error("Failed to resume Player Watch:", error);
+      await message.reply("❌ An error occurred while resuming Player Watch.");
+    }
+  },
+};
+
+/**
+ * 저장된 Watch 설정 삭제. !watchresume이 더 이상 작동하지 않게 됨.
+ */
+const watchClearCommand: Command = {
+  name: "watchclear",
+  description:
+    "Clear the saved Watch configuration (so !watchresume will no longer work until a new !watch)",
+  usage: "!watchclear",
+  execute: async (message: Message) => {
+    try {
+      const cleared = await playerWatchService.clearSavedConfig();
+      if (cleared) {
+        await message.reply(
+          "✅ Saved Watch configuration cleared. Use `!watch <minPower> <maxPower> <names...>` to start a new one.",
+        );
+      } else {
+        await message.reply("ℹ️ No saved Watch configuration to clear.");
+      }
+    } catch (error) {
+      console.error("Failed to clear Watch config:", error);
+      await message.reply("❌ An error occurred while clearing Watch config.");
+    }
+  },
+};
+
 // Commands array
 export const commands: Command[] = [
   helpCommand,
@@ -1393,6 +1824,11 @@ export const commands: Command[] = [
   allPositionsCommand,
   logsCommand,
   barbarianPowerCommand,
+  watchCommand,
+  watchStopCommand,
+  watchStatusCommand,
+  watchResumeCommand,
+  watchClearCommand,
 ];
 
 // Command aliases mapping

@@ -3,6 +3,7 @@ import * as dotenv from 'dotenv';
 import * as path from 'path';
 import * as fs from 'fs';
 import { commands, commandAliases } from './commands';
+import { playerWatchService } from './services/player';
 import { scheduler } from './services/scheduler';
 import { scraper } from './services/scraper';
 
@@ -314,19 +315,22 @@ process.on('unhandledRejection', (error: any) => {
 });
 
 // Graceful shutdown
-process.on('SIGINT', async () => {
-  console.log('\n🛑 Shutting down gracefully...');
+async function gracefulShutdown(signal: string) {
+  console.log(`\n🛑 Received ${signal}, shutting down gracefully...`);
+  if (playerWatchService.isActive()) {
+    try {
+      await playerWatchService.stop();
+    } catch (e) {
+      console.error('Failed to stop Player Watch service during shutdown:', e);
+    }
+  }
   scheduler.stop();
   await scraper.close();
   process.exit(0);
-});
+}
 
-process.on('SIGTERM', async () => {
-  console.log('\n🛑 Shutting down gracefully...');
-  scheduler.stop();
-  await scraper.close();
-  process.exit(0);
-});
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 
 // Bot login
 const token = process.env.DISCORD_TOKEN;
